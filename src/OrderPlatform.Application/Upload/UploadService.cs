@@ -388,11 +388,12 @@ public class UploadService : IUploadService
     public async Task<List<CustomerImportDto>> GetCustomersAsync(CancellationToken cancellationToken)
     {
         var customers = await _customerRepository.ListAsync(cancellationToken);
+        var counts = await _partRepository.CountGroupByCustomerAsync(customers.Select(c => c.Id), cancellationToken);
         return customers.Select(c => new CustomerImportDto
         {
             CustomerId = c.Id,
             CustomerName = c.Name,
-            PartCount = 0
+            PartCount = counts.GetValueOrDefault(c.Id, 0)
         }).ToList();
     }
 

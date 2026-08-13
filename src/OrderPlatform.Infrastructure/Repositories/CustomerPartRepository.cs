@@ -21,6 +21,22 @@ public class CustomerPartRepository : ICustomerPartRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<Dictionary<Guid, int>> CountGroupByCustomerAsync(IEnumerable<Guid> customerIds, CancellationToken cancellationToken)
+    {
+        var ids = customerIds as ICollection<Guid> ?? customerIds.ToList();
+        if (ids.Count == 0)
+        {
+            return new Dictionary<Guid, int>();
+        }
+
+        var result = await _dbContext.CustomerParts
+            .Where(x => ids.Contains(x.CustomerId))
+            .GroupBy(x => x.CustomerId)
+            .Select(g => new { CustomerId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.CustomerId, x => x.Count, cancellationToken);
+        return result;
+    }
+
     public async Task DeleteByCustomerAsync(Guid customerId, CancellationToken cancellationToken)
     {
         var parts = await _dbContext.CustomerParts

@@ -32,6 +32,7 @@ export default function UploadPage() {
   const { message } = App.useApp();
   const [uploading, setUploading] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
+  const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [batches, setBatches] = useState<UploadBatchDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -143,6 +144,7 @@ export default function UploadPage() {
       message.error('上传失败，请检查文件格式或是否重复上传');
     } finally {
       setUploading(false);
+      setFileList([]);
     }
   };
 
@@ -323,9 +325,11 @@ export default function UploadPage() {
           accept=".pdf,.xlsx,.xls"
           beforeUpload={() => false}
           disabled={uploading}
-          onChange={({ fileList }) => {
-            if (!uploading && fileList.length > 0) {
-              void handleUpload(fileList);
+          fileList={fileList}
+          onChange={({ fileList: newList }) => {
+            setFileList(newList);
+            if (!uploading && newList.length > 0) {
+              void handleUpload(newList);
             }
           }}
           maxCount={5}
