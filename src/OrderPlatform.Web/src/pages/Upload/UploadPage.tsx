@@ -7,7 +7,6 @@ import {
   Descriptions,
   Divider,
   Modal,
-  Popconfirm,
   Progress,
   Space,
   Table,
@@ -32,7 +31,7 @@ const POLL_INTERVAL = 1500;
 const PAGE_SIZE = 10;
 
 export default function UploadPage() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const isAdmin = useAuthStore((s) => s.userInfo?.role === 'Admin');
   const [uploading, setUploading] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
@@ -75,6 +74,19 @@ export default function UploadPage() {
     } catch {
       message.error('删除失败');
     }
+  };
+
+  const handleDeleteBatch = (record: UploadBatchDto) => {
+    modal.confirm({
+      title: '删除上传记录',
+      content: '确定删除该记录及其文件吗？订单将保留并变为未关联。',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      transitionName: 'ant-fade',
+      maskTransitionName: 'ant-fade',
+      onOk: () => deleteBatch(record.batchId),
+    });
   };
 
   const stopPolling = () => {
@@ -246,18 +258,15 @@ export default function UploadPage() {
             </Button>
           )}
           {isAdmin && (
-            <Popconfirm
-              title="删除上传记录"
-              description="确定删除该记录及其文件吗？订单将保留并变为未关联。"
-              okText="删除"
-              okButtonProps={{ danger: true }}
-              cancelText="取消"
-              onConfirm={() => void deleteBatch(record.batchId)}
+            <Button
+              size="small"
+              type="link"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => handleDeleteBatch(record)}
             >
-              <Button size="small" type="link" danger icon={<DeleteOutlined />}>
-                删除
-              </Button>
-            </Popconfirm>
+              删除
+            </Button>
           )}
         </Space>
       ),
