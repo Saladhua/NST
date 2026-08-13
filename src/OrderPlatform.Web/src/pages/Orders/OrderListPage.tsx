@@ -9,7 +9,7 @@ import type { CustomerImportDto, MatchStatus, OrderListDto, PushStatus } from '.
 
 const parseStatusOptions = [
   { value: 'Matched', label: '已关联' },
-  { value: 'Manual', label: '待人工' },
+  { value: 'Partial', label: '部分关联' },
   { value: 'Unmatched', label: '未关联' },
 ];
 
@@ -22,7 +22,7 @@ const pushStatusOptions = [
 function matchStatusTag(status: MatchStatus) {
   const map: Record<string, { color: string; text: string }> = {
     Matched: { color: 'success', text: '已关联' },
-    Manual: { color: 'warning', text: '待人工' },
+    Partial: { color: 'warning', text: '部分关联' },
     Unmatched: { color: 'error', text: '未关联' },
   };
   const item = map[status] ?? { color: 'default', text: status };

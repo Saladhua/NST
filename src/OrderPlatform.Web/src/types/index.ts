@@ -37,7 +37,7 @@ export interface PagedResult<T> {
   total: number;
 }
 
-export type MatchStatus = 'Matched' | 'Manual' | 'Unmatched';
+export type MatchStatus = 'Matched' | 'Partial' | 'Unmatched';
 export type PushStatus = 'NotPushed' | 'Pushed' | 'Failed';
 export type UserRole = 'Admin' | 'Operator';
 export type UserStatus = 'Active' | 'Disabled';

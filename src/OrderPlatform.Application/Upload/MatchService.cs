@@ -10,7 +10,7 @@ namespace OrderPlatform.Application.Upload;
 /// 规则：
 /// 1. 主关联键：PDF 存货编码 与 客户图号/客户新图号 精确相等。
 /// 2. 次关联键：PDF 规格型号的 外径×壁厚 前缀（如 16*1.4）匹配 Excel 规格列前缀，唯一命中即关联。
-/// 3. 未命中/多命中：标记 Unmatched，等待人工确认。
+/// 3. 未命中/多命中：标记 Unmatched 或 Partial，等待人工确认。
 /// </summary>
 public static class MatchService
 {

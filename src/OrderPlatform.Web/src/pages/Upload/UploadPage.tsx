@@ -245,7 +245,7 @@ export default function UploadPage() {
   const matchStatusTag = (status: string) => {
     const map: Record<string, { color: string; text: string }> = {
       Matched: { color: 'success', text: '已关联' },
-      Manual: { color: 'warning', text: '待人工' },
+      Partial: { color: 'warning', text: '部分关联' },
       Unmatched: { color: 'error', text: '未关联' },
     };
     const item = map[status] ?? { color: 'default', text: status };

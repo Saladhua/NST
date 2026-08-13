@@ -194,9 +194,9 @@ public class UploadService : IUploadService
             var parts = new List<CustomerPart>();
             foreach (var row in sheet.Rows)
             {
-                var nest = Get(row, "NEST图号");
+                var nest = Get(row, "NEST图号") ?? string.Empty;
                 var customerPartNo = Get(row, "客户图号") ?? Get(row, "客户新图号") ?? string.Empty;
-                var spec = Get(row, "规格");
+                var spec = Get(row, "规格") ?? string.Empty;
                 if (string.IsNullOrEmpty(nest) && string.IsNullOrEmpty(customerPartNo) && string.IsNullOrEmpty(spec))
                 {
                     continue;
@@ -208,8 +208,8 @@ public class UploadService : IUploadService
                     CustomerId = customer.Id,
                     NestPartNo = nest,
                     CustomerPartNo = customerPartNo,
-                    Spray = Get(row, "喷锌"),
-                    Alloy = Get(row, "合金"),
+                    Spray = Get(row, "喷锌") ?? string.Empty,
+                    Alloy = Get(row, "合金") ?? string.Empty,
                     Spec = spec,
                     Length = ParseNullableDecimal(Get(row, "长度（mm)") ?? Get(row, "长度")),
                     Raw = string.Join(" | ", row.Values),
@@ -302,7 +302,7 @@ public class UploadService : IUploadService
             }
             else if (order.Items.Any(i => i.MatchStatus == MatchStatus.Matched))
             {
-                order.ParseStatus = MatchStatus.Unmatched;
+                order.ParseStatus = MatchStatus.Partial;
             }
             else
             {
@@ -467,7 +467,7 @@ public class UploadService : IUploadService
         };
     }
 
-    private static string Get(Dictionary<string, string> row, string key)
+    private static string? Get(Dictionary<string, string> row, string key)
     {
         foreach (var (k, v) in row)
         {
@@ -477,7 +477,7 @@ public class UploadService : IUploadService
             }
         }
 
-        return string.Empty;
+        return null;
     }
 
     private static decimal? ParseNullableDecimal(string? text)
