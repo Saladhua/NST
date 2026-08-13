@@ -12,5 +12,9 @@ public interface ICustomerRepository
 
     Task AddAsync(Customer customer, CancellationToken cancellationToken);
 
+    void Update(Customer customer);
+
+    Task SoftDeleteAsync(Guid id, CancellationToken cancellationToken);
+
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }

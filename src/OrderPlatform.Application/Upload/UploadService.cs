@@ -31,6 +31,9 @@ public interface IUploadService
     Task<List<OrderGeneratedDto>> GetBatchOrdersAsync(Guid batchId, CancellationToken cancellationToken);
 
     Task DeleteBatchAsync(Guid batchId, CancellationToken cancellationToken);
+
+    /// <summary>软删除客户资料，保留历史订单关联与图号。</summary>
+    Task DeleteCustomerAsync(Guid customerId, CancellationToken cancellationToken);
 }
 
 public class UploadService : IUploadService
@@ -562,6 +565,15 @@ public class UploadService : IUploadService
 
         _batchRepository.Delete(batch);
         await _batchRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task DeleteCustomerAsync(Guid customerId, CancellationToken cancellationToken)
+    {
+        var customer = await _customerRepository.GetByIdAsync(customerId, cancellationToken)
+            ?? throw new BusinessException("客户不存在");
+
+        await _customerRepository.SoftDeleteAsync(customerId, cancellationToken);
+        await _customerRepository.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<UploadBatchDto> ToDtoAsync(UploadBatch batch, CancellationToken cancellationToken)

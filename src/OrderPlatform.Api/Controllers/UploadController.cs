@@ -77,6 +77,14 @@ public class UploadController : ControllerBase
         return ApiResponse<bool>.Ok(true, "删除成功");
     }
 
+    [HttpDelete("customers/{customerId:guid}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ApiResponse<bool>> DeleteCustomer(Guid customerId, CancellationToken cancellationToken)
+    {
+        await _uploadService.DeleteCustomerAsync(customerId, cancellationToken);
+        return ApiResponse<bool>.Ok(true, "删除成功");
+    }
+
     private Guid GetUserId()
     {
         var userIdClaim = User.FindFirst(JwtRegisteredClaimNames.Sub);

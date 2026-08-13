@@ -10,6 +10,9 @@ public class Customer
 
     public string? Remark { get; set; }
 
+    /// <summary>是否已删除（软删除）。</summary>
+    public bool IsDeleted { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

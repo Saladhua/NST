@@ -21,6 +21,6 @@ public class DashboardRepository : IDashboardRepository
 
     public Task<List<Customer>> GetAllCustomersAsync(CancellationToken cancellationToken)
     {
-        return _dbContext.Customers.AsNoTracking().ToListAsync(cancellationToken);
+        return _dbContext.Customers.AsNoTracking().Where(x => !x.IsDeleted).ToListAsync(cancellationToken);
     }
 }
