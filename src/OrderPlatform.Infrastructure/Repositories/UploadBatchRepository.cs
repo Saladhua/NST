@@ -48,6 +48,11 @@ public class UploadBatchRepository : IUploadBatchRepository
         _dbContext.UploadBatches.Update(batch);
     }
 
+    public void Delete(UploadBatch batch)
+    {
+        _dbContext.UploadBatches.Remove(batch);
+    }
+
     public Task SaveChangesAsync(CancellationToken cancellationToken)
     {
         return _dbContext.SaveChangesAsync(cancellationToken);

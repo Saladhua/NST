@@ -29,6 +29,8 @@ public interface IUploadService
     Task<List<CustomerImportDto>> GetCustomersAsync(CancellationToken cancellationToken);
 
     Task<List<OrderGeneratedDto>> GetBatchOrdersAsync(Guid batchId, CancellationToken cancellationToken);
+
+    Task DeleteBatchAsync(Guid batchId, CancellationToken cancellationToken);
 }
 
 public class UploadService : IUploadService
@@ -225,6 +227,89 @@ public class UploadService : IUploadService
 
         await _customerRepository.SaveChangesAsync(cancellationToken);
         await _partRepository.SaveChangesAsync(cancellationToken);
+
+        // 补匹配：客户资料导入后，回头关联先前上传的未匹配订单
+        await RematchPendingOrdersAsync(cancellationToken);
+    }
+
+    private async Task RematchPendingOrdersAsync(CancellationToken cancellationToken)
+    {
+        var orders = await _orderRepository.ListPendingMatchAsync(cancellationToken);
+        if (orders.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var order in orders)
+        {
+            if (string.IsNullOrEmpty(order.PdfRawJson))
+            {
+                continue;
+            }
+
+            var pdf = JsonSerializer.Deserialize<PdfParseResult>(order.PdfRawJson);
+            if (pdf is null || string.IsNullOrWhiteSpace(pdf.BuyerName))
+            {
+                continue;
+            }
+
+            var customer = await FindCustomerAsync(pdf.BuyerName, string.Empty, cancellationToken);
+            if (customer is null)
+            {
+                continue;
+            }
+
+            order.CustomerId = customer.Id;
+            var parts = await _partRepository.ListByCustomerAsync(customer.Id, cancellationToken);
+
+            var allMatched = true;
+            foreach (var item in order.Items)
+            {
+                var row = pdf.Rows.FirstOrDefault(r => r.LineNo == item.LineNo);
+                if (row is null)
+                {
+                    continue;
+                }
+
+                var (customerPartNo, nestPartNo, alloy, spray, length, status) = MatchService.Match(row, parts);
+                item.CustomerPartNo = customerPartNo;
+                item.NestPartNo = nestPartNo;
+                item.Alloy = alloy;
+                item.Spray = spray;
+                item.Length = length;
+                item.MatchStatus = status;
+                if (status != MatchStatus.Matched)
+                {
+                    allMatched = false;
+                }
+            }
+
+            if (order.Items.Count == 0)
+            {
+                continue;
+            }
+
+            order.ParseStatus = allMatched
+                ? MatchStatus.Matched
+                : order.Items.Any(i => i.MatchStatus == MatchStatus.Matched)
+                    ? MatchStatus.Partial
+                    : MatchStatus.Unmatched;
+
+            if (order.SourceFileId.HasValue)
+            {
+                var batch = await _batchRepository.GetByIdAsync(order.SourceFileId.Value, cancellationToken);
+                if (batch is not null && batch.CustomerId != customer.Id)
+                {
+                    batch.CustomerId = customer.Id;
+                    _batchRepository.Update(batch);
+                }
+            }
+
+            _orderRepository.Update(order);
+        }
+
+        await _batchRepository.SaveChangesAsync(cancellationToken);
+        await _orderRepository.SaveChangesAsync(cancellationToken);
     }
 
     private async Task ProcessPdfAsync(UploadBatch batch, string savedPath, CancellationToken cancellationToken)
@@ -252,6 +337,7 @@ public class UploadService : IUploadService
             OrderNo = orderNo,
             CustomerId = customer?.Id ?? Guid.Empty,
             OrderDate = pdf.OrderDate,
+            SourceFileId = batch.Id,
             ParseStatus = MatchStatus.Unmatched,
             PushStatus = PushStatus.NotPushed,
             PdfRawJson = JsonSerializer.Serialize(pdf),
@@ -399,38 +485,83 @@ public class UploadService : IUploadService
 
     public async Task<List<OrderGeneratedDto>> GetBatchOrdersAsync(Guid batchId, CancellationToken cancellationToken)
     {
-        // 简单实现：从该批次关联文件找订单（实际订单与批次通过 SourceFileId 关联，此处提供批次解析明细）
+        // 订单与批次通过 SourceFileId 关联，查询该批次生成的真实入库订单
+        var orders = await _orderRepository.ListBySourceFileIdAsync(batchId, cancellationToken);
+        if (orders.Count == 0)
+        {
+            return new List<OrderGeneratedDto>();
+        }
+
+        var result = new List<OrderGeneratedDto>();
+        foreach (var order in orders)
+        {
+            Customer? customer = null;
+            if (order.CustomerId != Guid.Empty)
+            {
+                customer = await _customerRepository.GetByIdAsync(order.CustomerId, cancellationToken);
+            }
+
+            result.Add(new OrderGeneratedDto
+            {
+                OrderId = order.Id,
+                OrderNo = order.OrderNo,
+                CustomerId = order.CustomerId,
+                CustomerName = customer?.Name,
+                ItemCount = order.Items.Count,
+                ParseStatus = order.ParseStatus,
+                Items = order.Items.Select(i => new MatchResultItem
+                {
+                    LineNo = i.LineNo,
+                    MaterialCode = i.MaterialCode,
+                    Spec = i.Spec,
+                    Quantity = i.Quantity,
+                    Unit = i.Unit,
+                    CustomerPartNo = i.CustomerPartNo,
+                    NestPartNo = i.NestPartNo,
+                    MatchStatus = i.MatchStatus
+                }).ToList()
+            });
+        }
+
+        return result;
+    }
+
+    public async Task DeleteBatchAsync(Guid batchId, CancellationToken cancellationToken)
+    {
         var batch = await _batchRepository.GetByIdAsync(batchId, cancellationToken)
             ?? throw new BusinessException("批次不存在");
-        if (string.IsNullOrEmpty(batch.RawDataJson) || batch.FileType != "PDF")
-        {
-            return new List<OrderGeneratedDto>();
-        }
 
-        var pdf = JsonSerializer.Deserialize<PdfParseResult>(batch.RawDataJson);
-        if (pdf is null)
+        if (!string.IsNullOrEmpty(batch.OriginalPath))
         {
-            return new List<OrderGeneratedDto>();
-        }
-
-        return new List<OrderGeneratedDto>
-        {
-            new()
+            var filePath = Path.Combine(_env.ContentRootPath, batch.OriginalPath);
+            if (File.Exists(filePath))
             {
-                OrderId = Guid.Empty,
-                OrderNo = pdf.OrderNo,
-                CustomerId = batch.CustomerId,
-                ItemCount = pdf.Rows.Count,
-                Items = pdf.Rows.Select(r => new MatchResultItem
-                {
-                    LineNo = r.LineNo,
-                    MaterialCode = r.MaterialCode,
-                    Spec = r.Spec,
-                    Quantity = r.Quantity,
-                    Unit = r.Unit
-                }).ToList()
+                File.Delete(filePath);
             }
-        };
+        }
+
+        // 订单保留，仅断开关联：来源批次、客户、匹配状态全部回到未关联
+        var orders = await _orderRepository.ListBySourceFileIdAsync(batch.Id, cancellationToken);
+        foreach (var order in orders)
+        {
+            order.SourceFileId = null;
+            order.CustomerId = Guid.Empty;
+            order.ParseStatus = MatchStatus.Unmatched;
+            foreach (var item in order.Items)
+            {
+                item.CustomerPartNo = string.Empty;
+                item.NestPartNo = string.Empty;
+                item.Alloy = string.Empty;
+                item.Spray = string.Empty;
+                item.Length = null;
+                item.MatchStatus = MatchStatus.Unmatched;
+            }
+
+            _orderRepository.Update(order);
+        }
+
+        _batchRepository.Delete(batch);
+        await _batchRepository.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<UploadBatchDto> ToDtoAsync(UploadBatch batch, CancellationToken cancellationToken)

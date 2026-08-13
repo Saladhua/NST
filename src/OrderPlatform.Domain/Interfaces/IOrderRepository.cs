@@ -9,6 +9,10 @@ public interface IOrderRepository
 
     Task<OrderMain?> GetByOrderNoAsync(string orderNo, CancellationToken cancellationToken);
 
+    Task<List<OrderMain>> ListBySourceFileIdAsync(Guid sourceFileId, CancellationToken cancellationToken);
+
+    Task<List<OrderMain>> ListPendingMatchAsync(CancellationToken cancellationToken);
+
     Task<List<OrderMain>> QueryAsync(
         int page,
         int pageSize,
@@ -28,6 +32,8 @@ public interface IOrderRepository
     Task AddAsync(OrderMain order, CancellationToken cancellationToken);
 
     void Update(OrderMain order);
+
+    Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken);
 
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { App, Button, Card, Input, Select, Space, Table, Tag } from 'antd';
-import { ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { App, Button, Card, Input, Popconfirm, Select, Space, Table, Tag, Tooltip } from 'antd';
+import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router';
 import dayjs from 'dayjs';
 import { orderApi } from '../../api/order';
 import { uploadApi } from '../../api/upload';
+import { useAuthStore } from '../../store/authStore';
 import type { CustomerImportDto, MatchStatus, OrderListDto, PushStatus } from '../../types';
 
 const parseStatusOptions = [
@@ -42,6 +43,7 @@ function pushStatusTag(status: PushStatus) {
 export default function OrderListPage() {
   const { message } = App.useApp();
   const navigate = useNavigate();
+  const isAdmin = useAuthStore((s) => s.userInfo?.role === 'Admin');
 
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<OrderListDto[]>([]);
@@ -94,6 +96,16 @@ export default function OrderListPage() {
       void load();
     } catch {
       message.error('推送失败，请重试');
+    }
+  };
+
+  const deleteOrder = async (id: string) => {
+    try {
+      await orderApi.delete(id);
+      message.success('删除成功');
+      void load();
+    } catch {
+      message.error('删除失败');
     }
   };
 
@@ -152,7 +164,7 @@ export default function OrderListPage() {
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 150,
       render: (_: unknown, record: OrderListDto) => (
         <Space>
           <Button type="link" size="small" onClick={() => navigate(`/orders/${record.id}`)}>
@@ -166,6 +178,29 @@ export default function OrderListPage() {
           >
             推送
           </Button>
+          {isAdmin && (
+            <Tooltip title={record.pushStatus === 'Pushed' ? '已推送的订单不可删除' : ''}>
+              <Popconfirm
+                title="删除订单"
+                description={`确定删除订单「${record.orderNo}」吗？删除后不可恢复。`}
+                okText="删除"
+                okButtonProps={{ danger: true }}
+                cancelText="取消"
+                disabled={record.pushStatus === 'Pushed'}
+                onConfirm={() => void deleteOrder(record.id)}
+              >
+                <Button
+                  type="link"
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  disabled={record.pushStatus === 'Pushed'}
+                >
+                  删除
+                </Button>
+              </Popconfirm>
+            </Tooltip>
+          )}
         </Space>
       ),
     },

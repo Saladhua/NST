@@ -69,6 +69,14 @@ public class UploadController : ControllerBase
         return ApiResponse<List<OrderGeneratedDto>>.Ok(result);
     }
 
+    [HttpDelete("batch/{batchId:guid}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ApiResponse<bool>> DeleteBatch(Guid batchId, CancellationToken cancellationToken)
+    {
+        await _uploadService.DeleteBatchAsync(batchId, cancellationToken);
+        return ApiResponse<bool>.Ok(true, "删除成功");
+    }
+
     private Guid GetUserId()
     {
         var userIdClaim = User.FindFirst(JwtRegisteredClaimNames.Sub);

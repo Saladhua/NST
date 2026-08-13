@@ -21,4 +21,5 @@ export const orderApi = {
     }),
   detail: (id: string) => http.get<OrderDetailDto>(`/order/detail/${id}`),
   push: (orderId: string) => http.post<{ logId: string }>('/order/push', { orderId }),
+  delete: (id: string) => http.delete<boolean>(`/order/${id}`),
 };

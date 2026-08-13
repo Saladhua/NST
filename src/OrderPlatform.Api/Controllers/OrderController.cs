@@ -54,6 +54,14 @@ public class OrderController : ControllerBase
         var result = await _orderService.PushAsync(request.OrderId, cancellationToken);
         return OrderPlatform.Shared.Api.ApiResponse<PushResultDto>.Ok(result, "推送成功");
     }
+
+    [HttpDelete("{id:guid}")]
+    [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin")]
+    public async Task<OrderPlatform.Shared.Api.ApiResponse<bool>> Delete(Guid id, CancellationToken cancellationToken)
+    {
+        await _orderService.DeleteAsync(id, cancellationToken);
+        return OrderPlatform.Shared.Api.ApiResponse<bool>.Ok(true, "删除成功");
+    }
 }
 
 public class PushOrderRequest

@@ -4,8 +4,10 @@ import {
   Alert,
   Button,
   Card,
+  Descriptions,
   Divider,
   Modal,
+  Popconfirm,
   Progress,
   Space,
   Table,
@@ -13,9 +15,10 @@ import {
   Typography,
   Upload,
 } from 'antd';
-import { InboxOutlined } from '@ant-design/icons';
+import { DeleteOutlined, InboxOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { uploadApi } from '../../api/upload';
+import { useAuthStore } from '../../store/authStore';
 import type {
   CustomerImportDto,
   ExcelBatchDetailDto,
@@ -30,13 +33,15 @@ const PAGE_SIZE = 10;
 
 export default function UploadPage() {
   const { message } = App.useApp();
+  const isAdmin = useAuthStore((s) => s.userInfo?.role === 'Admin');
   const [uploading, setUploading] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [batches, setBatches] = useState<UploadBatchDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [orders, setOrders] = useState<OrderGeneratedDto[]>([]);
+  const [orders, setOrders] = useState<OrderGeneratedDto[] | null>(null);
+  const [orderLoading, setOrderLoading] = useState(false);
   const [customers, setCustomers] = useState<CustomerImportDto[]>([]);
   const [excelDetail, setExcelDetail] = useState<ExcelBatchDetailDto | null>(null);
   const [excelLoading, setExcelLoading] = useState(false);
@@ -61,6 +66,17 @@ export default function UploadPage() {
     }
   }, []);
 
+  const deleteBatch = async (batchId: string) => {
+    try {
+      await uploadApi.deleteBatch(batchId);
+      message.success('删除成功');
+      void loadBatches(1);
+      void refreshCustomers();
+    } catch {
+      message.error('删除失败');
+    }
+  };
+
   const stopPolling = () => {
     if (pollTimerRef.current !== null) {
       window.clearInterval(pollTimerRef.current);
@@ -69,11 +85,14 @@ export default function UploadPage() {
   };
 
   const loadBatchOrders = async (batchId: string) => {
+    setOrderLoading(true);
     try {
-      const result = await uploadApi.batchOrders(batchId);
-      setOrders(result);
+      setOrders(await uploadApi.batchOrders(batchId));
     } catch {
-      setOrders([]);
+      message.error('加载订单明细失败');
+      setOrders(null);
+    } finally {
+      setOrderLoading(false);
     }
   };
 
@@ -119,9 +138,6 @@ export default function UploadPage() {
         await refreshBatches(ids);
         message.success('上传解析完成');
         void refreshCustomers();
-        if (result.length > 0) {
-          await loadBatchOrders(result[0].batchId);
-        }
         return;
       }
 
@@ -135,9 +151,6 @@ export default function UploadPage() {
           message.success(failed.length === 0 ? '上传解析完成' : `解析完成，${failed.length} 个文件失败`);
           void refreshCustomers();
           void loadBatches(1);
-          if (updated.length > 0) {
-            await loadBatchOrders(updated[0].batchId);
-          }
         }
       }, POLL_INTERVAL);
     } catch {
@@ -210,12 +223,6 @@ export default function UploadPage() {
       ),
     },
     {
-      title: '订单数',
-      dataIndex: 'orderCount',
-      key: 'orderCount',
-      width: 80,
-    },
-    {
       title: '上传时间',
       dataIndex: 'createdAt',
       key: 'createdAt',
@@ -225,7 +232,7 @@ export default function UploadPage() {
     {
       title: '操作',
       key: 'action',
-      width: 180,
+      width: 220,
       render: (_: unknown, record: UploadBatchDto) => (
         <Space size={4}>
           {record.fileType === 'Excel' && record.status === 'Completed' && (
@@ -233,12 +240,25 @@ export default function UploadPage() {
               查看数据
             </Button>
           )}
-          <Typography.Link
-            disabled={record.status !== 'Completed'}
-            onClick={() => void loadBatchOrders(record.batchId)}
-          >
-            查看明细
-          </Typography.Link>
+          {record.fileType === 'PDF' && record.status === 'Completed' && (
+            <Button size="small" type="link" onClick={() => void loadBatchOrders(record.batchId)}>
+              查看明细
+            </Button>
+          )}
+          {isAdmin && (
+            <Popconfirm
+              title="删除上传记录"
+              description="确定删除该记录及其文件吗？订单将保留并变为未关联。"
+              okText="删除"
+              okButtonProps={{ danger: true }}
+              cancelText="取消"
+              onConfirm={() => void deleteBatch(record.batchId)}
+            >
+              <Button size="small" type="link" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -254,50 +274,29 @@ export default function UploadPage() {
     return <Tag color={item.color}>{item.text}</Tag>;
   };
 
-  const orderColumns = [
-    { title: '订单号', dataIndex: 'orderNo', key: 'orderNo', width: 220 },
-    { title: '客户', dataIndex: 'customerName', key: 'customerName', width: 140 },
-    { title: '明细行数', dataIndex: 'itemCount', key: 'itemCount', width: 100 },
+  const itemColumns = [
+    { title: '行', dataIndex: 'lineNo', key: 'lineNo', width: 60 },
+    { title: '编码', dataIndex: 'materialCode', key: 'materialCode', render: (v: string) => v || '-' },
+    { title: '规格', dataIndex: 'spec', key: 'spec', render: (v: string) => v || '-' },
+    { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 100 },
     {
-      title: '关联状态',
-      dataIndex: 'parseStatus',
-      key: 'parseStatus',
-      width: 100,
-      render: (value: string) => matchStatusTag(value),
+      title: '客户图号',
+      dataIndex: 'customerPartNo',
+      key: 'customerPartNo',
+      render: (v: string | null) => v || '-',
     },
     {
-      title: '关联明细',
-      key: 'items',
-      render: (_: unknown, record: OrderGeneratedDto) => (
-        <div className="max-h-64 overflow-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b">
-                <th className="py-1 pr-2 text-left">行</th>
-                <th className="py-1 pr-2 text-left">编码</th>
-                <th className="py-1 pr-2 text-left">规格</th>
-                <th className="py-1 pr-2 text-left">数量</th>
-                <th className="py-1 pr-2 text-left">客户图号</th>
-                <th className="py-1 pr-2 text-left">套图图号</th>
-                <th className="py-1 text-left">状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {record.items.map((item) => (
-                <tr key={item.lineNo} className="border-b">
-                  <td className="py-1 pr-2">{item.lineNo}</td>
-                  <td className="py-1 pr-2">{item.materialCode || '-'}</td>
-                  <td className="py-1 pr-2">{item.spec || '-'}</td>
-                  <td className="py-1 pr-2">{item.quantity}</td>
-                  <td className="py-1 pr-2">{item.customerPartNo || '-'}</td>
-                  <td className="py-1 pr-2">{item.nestPartNo || '-'}</td>
-                  <td className="py-1">{matchStatusTag(item.matchStatus)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ),
+      title: '套图图号',
+      dataIndex: 'nestPartNo',
+      key: 'nestPartNo',
+      render: (v: string | null) => v || '-',
+    },
+    {
+      title: '状态',
+      dataIndex: 'matchStatus',
+      key: 'matchStatus',
+      width: 100,
+      render: (v: string) => matchStatusTag(v),
     },
   ];
 
@@ -368,18 +367,6 @@ export default function UploadPage() {
         </Card>
       )}
 
-      {orders.length > 0 && (
-        <Card title="生成订单">
-          <Table<OrderGeneratedDto>
-            rowKey="orderId"
-            columns={orderColumns}
-            dataSource={orders}
-            pagination={false}
-            size="small"
-          />
-        </Card>
-      )}
-
       <Divider />
 
       <Modal
@@ -409,6 +396,46 @@ export default function UploadPage() {
             />
           </div>
         ))}
+      </Modal>
+
+      <Modal
+        title="订单明细"
+        open={orders !== null}
+        loading={orderLoading}
+        footer={null}
+        width={1100}
+        onCancel={() => setOrders(null)}
+        styles={{ body: { maxHeight: '70vh', overflow: 'auto' } }}
+      >
+        {orders && orders.length > 0 ? (
+          <div className="space-y-4">
+            {orders.map((order) => (
+              <Card key={order.orderId} size="small" title={`订单：${order.orderNo}`}>
+                <Descriptions
+                  size="small"
+                  column={4}
+                  className="mb-4"
+                  items={[
+                    { key: 'orderNo', label: '订单号', children: order.orderNo },
+                    { key: 'customerName', label: '客户', children: order.customerName || '-' },
+                    { key: 'itemCount', label: '明细行数', children: order.itemCount },
+                    { key: 'parseStatus', label: '关联状态', children: matchStatusTag(order.parseStatus) },
+                  ]}
+                />
+                <Table
+                  rowKey="lineNo"
+                  columns={itemColumns}
+                  dataSource={order.items}
+                  pagination={false}
+                  size="small"
+                  scroll={{ x: 'max-content' }}
+                />
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <Typography.Text type="secondary">该批次未查询到关联订单（历史批次可能未建立批次关联）。</Typography.Text>
+        )}
       </Modal>
 
       <Card title="已导入客户资料" extra={<Typography.Text type="secondary">供 PDF 自动关联图号</Typography.Text>}>

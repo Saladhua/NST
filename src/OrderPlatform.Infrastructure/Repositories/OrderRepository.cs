@@ -29,6 +29,25 @@ public class OrderRepository : IOrderRepository
             .FirstOrDefaultAsync(x => x.OrderNo == orderNo, cancellationToken);
     }
 
+    public Task<List<OrderMain>> ListBySourceFileIdAsync(Guid sourceFileId, CancellationToken cancellationToken)
+    {
+        return _dbContext.Orders
+            .AsNoTracking()
+            .Include(x => x.Items)
+            .Where(x => x.SourceFileId == sourceFileId)
+            .OrderByDescending(x => x.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    public Task<List<OrderMain>> ListPendingMatchAsync(CancellationToken cancellationToken)
+    {
+        return _dbContext.Orders
+            .Include(x => x.Items)
+            .Where(x => x.ParseStatus != MatchStatus.Matched)
+            .OrderBy(x => x.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
     private IQueryable<OrderMain> ApplyFilter(
         IQueryable<OrderMain> query,
         string? keyword,
@@ -97,6 +116,22 @@ public class OrderRepository : IOrderRepository
     public void Update(OrderMain order)
     {
         _dbContext.Orders.Update(order);
+    }
+
+    public async Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var order = await _dbContext.Orders
+            .Include(x => x.Items)
+            .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (order is null)
+        {
+            return false;
+        }
+
+        _dbContext.OrderItems.RemoveRange(order.Items);
+        _dbContext.Orders.Remove(order);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return true;
     }
 
     public Task SaveChangesAsync(CancellationToken cancellationToken)

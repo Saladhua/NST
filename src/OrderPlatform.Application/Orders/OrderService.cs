@@ -14,6 +14,8 @@ public interface IOrderService
     Task<OrderDetailDto> GetDetailAsync(Guid id, CancellationToken cancellationToken);
 
     Task<PushResultDto> PushAsync(Guid orderId, CancellationToken cancellationToken);
+
+    Task DeleteAsync(Guid id, CancellationToken cancellationToken);
 }
 
 public class OrderService : IOrderService
@@ -141,5 +143,18 @@ public class OrderService : IOrderService
             Status = "Success",
             PushTime = log.PushTime
         };
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var order = await _orderRepository.GetByIdAsync(id, cancellationToken)
+            ?? throw new BusinessException("订单不存在");
+
+        if (order.PushStatus == PushStatus.Pushed)
+        {
+            throw new BusinessException("已推送的订单不可删除");
+        }
+
+        await _orderRepository.DeleteAsync(id, cancellationToken);
     }
 }
