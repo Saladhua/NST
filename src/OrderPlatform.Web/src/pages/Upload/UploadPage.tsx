@@ -1,9 +1,11 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   App,
   Alert,
   Card,
   Divider,
+  Progress,
+  Space,
   Table,
   Tag,
   Typography,
@@ -20,12 +22,16 @@ import type {
 
 const { Dragger } = Upload;
 
+const POLL_INTERVAL = 1500;
+
 export default function UploadPage() {
   const { message } = App.useApp();
   const [uploading, setUploading] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [batches, setBatches] = useState<UploadBatchDto[]>([]);
   const [orders, setOrders] = useState<OrderGeneratedDto[]>([]);
   const [customers, setCustomers] = useState<CustomerImportDto[]>([]);
+  const pollTimerRef = useRef<number | null>(null);
 
   const refreshCustomers = useCallback(async () => {
     try {
@@ -35,6 +41,13 @@ export default function UploadPage() {
     }
   }, []);
 
+  const stopPolling = () => {
+    if (pollTimerRef.current !== null) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  };
+
   const loadBatchOrders = async (batchId: string) => {
     try {
       const result = await uploadApi.batchOrders(batchId);
@@ -43,6 +56,22 @@ export default function UploadPage() {
       setOrders([]);
     }
   };
+
+  const allFinished = (list: UploadBatchDto[]) =>
+    list.every((b) => b.status === 'Completed' || b.status === 'Failed');
+
+  const refreshBatches = useCallback(async (ids: string[]) => {
+    const updated: UploadBatchDto[] = [];
+    for (const id of ids) {
+      try {
+        updated.push(await uploadApi.batch(id));
+      } catch {
+        // 单个批次查询失败跳过
+      }
+    }
+    setBatches(updated);
+    return updated;
+  }, []);
 
   const handleUpload = async (fileList: UploadFile[]) => {
     const files = fileList
@@ -54,20 +83,49 @@ export default function UploadPage() {
     }
 
     setUploading(true);
+    setUploadPercent(0);
     try {
-      const result = await uploadApi.upload(files);
-      setBatches(result);
-      message.success('上传解析完成');
-      void refreshCustomers();
-      if (result.length > 0) {
-        await loadBatchOrders(result[0].batchId);
+      const result = await uploadApi.upload(files, ({ percent }) => setUploadPercent(percent));
+      if (result.length === 0) {
+        message.success('上传成功');
+        void refreshCustomers();
+        return;
       }
+
+      setBatches(result);
+      const ids = result.map((b) => b.batchId);
+      if (allFinished(result)) {
+        await refreshBatches(ids);
+        message.success('上传解析完成');
+        void refreshCustomers();
+        if (result.length > 0) {
+          await loadBatchOrders(result[0].batchId);
+        }
+        return;
+      }
+
+      message.info('上传成功，正在后台解析...');
+      stopPolling();
+      pollTimerRef.current = window.setInterval(async () => {
+        const updated = await refreshBatches(ids);
+        if (allFinished(updated)) {
+          stopPolling();
+          const failed = updated.filter((b) => b.status === 'Failed');
+          message.success(failed.length === 0 ? '上传解析完成' : `解析完成，${failed.length} 个文件失败`);
+          void refreshCustomers();
+          if (updated.length > 0) {
+            await loadBatchOrders(updated[0].batchId);
+          }
+        }
+      }, POLL_INTERVAL);
     } catch {
-      message.error('上传失败，请检查文件格式');
+      message.error('上传失败，请检查文件格式或是否重复上传');
     } finally {
       setUploading(false);
     }
   };
+
+  useEffect(() => stopPolling, []);
 
   const batchColumns = [
     { title: '批次号', dataIndex: 'batchNo', key: 'batchNo', width: 220 },
@@ -87,8 +145,28 @@ export default function UploadPage() {
       width: 100,
       render: (value: string) => (
         <Tag color={value === 'Completed' ? 'success' : value === 'Failed' ? 'error' : 'processing'}>
-          {value === 'Completed' ? '完成' : value === 'Failed' ? '失败' : value}
+          {value === 'Completed' ? '完成' : value === 'Failed' ? '失败' : '解析中'}
         </Tag>
+      ),
+    },
+    {
+      title: '进度',
+      dataIndex: 'progress',
+      key: 'progress',
+      width: 160,
+      render: (value: number, record: UploadBatchDto) => (
+        <Space direction="vertical" size={0} style={{ width: '100%' }}>
+          <Progress
+            percent={value}
+            size="small"
+            status={record.status === 'Failed' ? 'exception' : record.status === 'Completed' ? 'success' : 'active'}
+          />
+          {record.errorMessage && (
+            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+              {record.errorMessage}
+            </Typography.Text>
+          )}
+        </Space>
       ),
     },
     {
@@ -109,7 +187,10 @@ export default function UploadPage() {
       key: 'action',
       width: 100,
       render: (_: unknown, record: UploadBatchDto) => (
-        <Typography.Link onClick={() => void loadBatchOrders(record.batchId)}>
+        <Typography.Link
+          disabled={record.status !== 'Completed'}
+          onClick={() => void loadBatchOrders(record.batchId)}
+        >
           查看明细
         </Typography.Link>
       ),
@@ -190,12 +271,13 @@ export default function UploadPage() {
           type="info"
           showIcon
           className="mb-4"
-          message="支持上传 PDF 订单、Excel 客户资料（含图号）。PDF 上传后将自动识别客户并解析订单明细。"
+          message="支持上传 PDF 订单、Excel 客户资料（含图号）。PDF 上传后将自动识别客户并解析订单明细。同名文件不可重复上传，重复订单号将自动跳过。"
         />
         <Dragger
           multiple
           accept=".pdf,.xlsx,.xls"
           beforeUpload={() => false}
+          disabled={uploading}
           onChange={({ fileList }) => {
             if (!uploading && fileList.length > 0) {
               void handleUpload(fileList);
@@ -209,10 +291,18 @@ export default function UploadPage() {
           <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
           <p className="ant-upload-hint">支持 PDF / Excel，单文件不超过 50MB</p>
         </Dragger>
+        {uploading && (
+          <Progress
+            className="mt-4"
+            percent={uploadPercent}
+            status="active"
+            format={(p) => (p === 100 ? '等待服务器处理...' : `上传中 ${p}%`)}
+          />
+        )}
       </Card>
 
       {batches.length > 0 && (
-        <Card title="本次上传结果">
+        <Card title="上传批次">
           <Table<UploadBatchDto>
             rowKey="batchId"
             columns={batchColumns}

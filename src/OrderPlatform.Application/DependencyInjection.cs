@@ -21,6 +21,7 @@ public static class DependencyInjection
         services.AddScoped<IPdfParser, PdfParser>();
         services.AddScoped<IExcelParser, ExcelParser>();
         services.AddScoped<IUploadService, UploadService>();
+        services.AddSingleton<IUploadJobQueue, UploadJobQueue>();
         services.AddScoped<IOrderService, OrderService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<IConfigService, ConfigService>();

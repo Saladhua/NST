@@ -18,6 +18,10 @@ public class UploadBatch
 
     public UploadStatus Status { get; set; }
 
+    public int Progress { get; set; }
+
+    public string? ErrorMessage { get; set; }
+
     public string? RawDataJson { get; set; }
 
     public string OriginalPath { get; set; } = string.Empty;

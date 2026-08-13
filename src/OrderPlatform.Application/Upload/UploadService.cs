@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using OrderPlatform.Application.Parsers;
 using OrderPlatform.Application.Upload.Dtos;
 using OrderPlatform.Domain.Entities;
@@ -12,8 +13,11 @@ namespace OrderPlatform.Application.Upload;
 
 public interface IUploadService
 {
-    /// <summary>处理上传：保存文件、解析、按类型生成客户资料或订单。</summary>
-    Task<List<UploadBatchDto>> ProcessAsync(IEnumerable<IFormFile> files, Guid userId, CancellationToken cancellationToken);
+    /// <summary>接收上传：重名检查、保存文件、创建 Pending 批次并入队，立即返回批次列表。</summary>
+    Task<List<UploadBatchDto>> CreateBatchesAsync(IEnumerable<IFormFile> files, Guid userId, CancellationToken cancellationToken);
+
+    /// <summary>后台解析指定批次，更新进度与状态。</summary>
+    Task ProcessBatchAsync(Guid batchId, CancellationToken cancellationToken);
 
     Task<UploadBatchDto> GetBatchAsync(Guid batchId, CancellationToken cancellationToken);
 
@@ -32,6 +36,8 @@ public class UploadService : IUploadService
     private readonly IOrderRepository _orderRepository;
     private readonly IPdfParser _pdfParser;
     private readonly IExcelParser _excelParser;
+    private readonly IUploadJobQueue _jobQueue;
+    private readonly ILogger<UploadService> _logger;
 
     public UploadService(
         IWebHostEnvironment env,
@@ -40,7 +46,9 @@ public class UploadService : IUploadService
         ICustomerPartRepository partRepository,
         IOrderRepository orderRepository,
         IPdfParser pdfParser,
-        IExcelParser excelParser)
+        IExcelParser excelParser,
+        IUploadJobQueue jobQueue,
+        ILogger<UploadService> logger)
     {
         _env = env;
         _batchRepository = batchRepository;
@@ -49,9 +57,11 @@ public class UploadService : IUploadService
         _orderRepository = orderRepository;
         _pdfParser = pdfParser;
         _excelParser = excelParser;
+        _jobQueue = jobQueue;
+        _logger = logger;
     }
 
-    public async Task<List<UploadBatchDto>> ProcessAsync(IEnumerable<IFormFile> files, Guid userId, CancellationToken cancellationToken)
+    public async Task<List<UploadBatchDto>> CreateBatchesAsync(IEnumerable<IFormFile> files, Guid userId, CancellationToken cancellationToken)
     {
         var fileList = files.Where(f => f.Length > 0).ToList();
         if (fileList.Count == 0)
@@ -59,7 +69,6 @@ public class UploadService : IUploadService
             throw new BusinessException("未接收到有效文件");
         }
 
-        var results = new List<UploadBatchDto>();
         var group = fileList.GroupBy(f => GetFileType(f.FileName)).ToList();
         if (group.Count > 1)
         {
@@ -68,14 +77,60 @@ public class UploadService : IUploadService
 
         foreach (var file in fileList)
         {
-            var batch = await SaveAndParseAsync(file, userId, cancellationToken);
+            if (await _batchRepository.ExistsByFileNameAsync(file.FileName, cancellationToken))
+            {
+                throw new BusinessException($"文件「{file.FileName}」已上传过，请勿重复上传");
+            }
+        }
+
+        var results = new List<UploadBatchDto>();
+        foreach (var file in fileList)
+        {
+            var batch = await SaveFileAsync(file, userId, cancellationToken);
+            _jobQueue.Enqueue(batch.Id);
             results.Add(await ToDtoAsync(batch, cancellationToken));
         }
 
         return results;
     }
 
-    private async Task<UploadBatch> SaveAndParseAsync(IFormFile file, Guid userId, CancellationToken cancellationToken)
+    public async Task ProcessBatchAsync(Guid batchId, CancellationToken cancellationToken)
+    {
+        var batch = await _batchRepository.GetByIdAsync(batchId, cancellationToken)
+            ?? throw new BusinessException("批次不存在");
+
+        batch.Status = UploadStatus.Parsing;
+        batch.Progress = 30;
+        await _batchRepository.SaveChangesAsync(cancellationToken);
+
+        var savedPath = Path.Combine(_env.ContentRootPath, batch.OriginalPath);
+        try
+        {
+            if (batch.FileType == "PDF")
+            {
+                await ProcessPdfAsync(batch, savedPath, cancellationToken);
+            }
+            else
+            {
+                await ProcessExcelAsync(batch, savedPath, cancellationToken);
+            }
+
+            batch.Status = UploadStatus.Completed;
+            batch.Progress = 100;
+            batch.ErrorMessage = null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "解析上传批次 {BatchId} 失败：{Message}", batchId, ex.Message);
+            batch.Status = UploadStatus.Failed;
+            batch.Progress = 100;
+            batch.ErrorMessage = ex.Message;
+        }
+
+        await _batchRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task<UploadBatch> SaveFileAsync(IFormFile file, Guid userId, CancellationToken cancellationToken)
     {
         var fileType = GetFileType(file.FileName);
         var batchNo = $"{DateTime.Now:yyyyMMddHHmmss}{Guid.NewGuid():N}"[..24];
@@ -87,10 +142,12 @@ public class UploadService : IUploadService
             FileType = fileType,
             FileName = file.FileName,
             UploadUserId = userId,
-            Status = UploadStatus.Parsing,
+            Status = UploadStatus.Pending,
+            Progress = 10,
             CreatedAt = DateTime.Now
         };
         await _batchRepository.AddAsync(batch, cancellationToken);
+        await _batchRepository.SaveChangesAsync(cancellationToken);
 
         var dir = Path.Combine(_env.ContentRootPath, RootDirectory, DateTime.Now.ToString("yyyy"), DateTime.Now.ToString("MM"), DateTime.Now.ToString("dd"));
         Directory.CreateDirectory(dir);
@@ -102,26 +159,7 @@ public class UploadService : IUploadService
         }
 
         batch.OriginalPath = Path.GetRelativePath(_env.ContentRootPath, savedPath);
-
-        try
-        {
-            if (fileType == "PDF")
-            {
-                await ProcessPdfAsync(batch, savedPath, cancellationToken);
-            }
-            else
-            {
-                await ProcessExcelAsync(batch, savedPath, cancellationToken);
-            }
-
-            batch.Status = UploadStatus.Completed;
-        }
-        catch
-        {
-            batch.Status = UploadStatus.Failed;
-            throw;
-        }
-
+        batch.Progress = 20;
         await _batchRepository.SaveChangesAsync(cancellationToken);
         return batch;
     }
@@ -130,6 +168,7 @@ public class UploadService : IUploadService
     {
         var result = await _excelParser.ParseAsync(savedPath, cancellationToken);
         batch.RawDataJson = JsonSerializer.Serialize(result);
+        batch.Progress = 50;
 
         foreach (var sheet in result.Sheets)
         {
@@ -189,6 +228,15 @@ public class UploadService : IUploadService
         var orderNo = string.IsNullOrEmpty(pdf.OrderNo)
             ? $"ORDER-{DateTime.Now:yyyyMMddHHmmss}"
             : pdf.OrderNo;
+
+        // 订单号去重：已存在则跳过创建
+        var existingOrder = await _orderRepository.GetByOrderNoAsync(orderNo, cancellationToken);
+        if (existingOrder is not null)
+        {
+            batch.ErrorMessage = $"订单「{orderNo}」已存在，已跳过重复导入";
+            batch.RawDataJson = JsonSerializer.Serialize(pdf);
+            return;
+        }
 
         // 客户识别：解析出的客户名精确匹配，否则尝试从文件名匹配
         var customer = await FindCustomerAsync(pdf.BuyerName, batch.FileName, cancellationToken);
@@ -352,6 +400,8 @@ public class UploadService : IUploadService
             FileName = batch.FileName,
             CustomerId = batch.CustomerId,
             Status = batch.Status.ToString(),
+            Progress = batch.Progress,
+            ErrorMessage = batch.ErrorMessage,
             CreatedAt = batch.CreatedAt
         };
 

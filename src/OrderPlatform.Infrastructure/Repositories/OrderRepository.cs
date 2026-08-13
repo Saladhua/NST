@@ -22,6 +22,13 @@ public class OrderRepository : IOrderRepository
             .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
     }
 
+    public Task<OrderMain?> GetByOrderNoAsync(string orderNo, CancellationToken cancellationToken)
+    {
+        return _dbContext.Orders
+            .Include(x => x.Items)
+            .FirstOrDefaultAsync(x => x.OrderNo == orderNo, cancellationToken);
+    }
+
     private IQueryable<OrderMain> ApplyFilter(
         IQueryable<OrderMain> query,
         string? keyword,

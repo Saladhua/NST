@@ -16,6 +16,10 @@ public class UploadBatchDto
 
     public string Status { get; set; } = string.Empty;
 
+    public int Progress { get; set; }
+
+    public string? ErrorMessage { get; set; }
+
     public bool Parsed { get; set; }
 
     public int OrderCount { get; set; }

@@ -26,8 +26,8 @@ public class UploadController : ControllerBase
         CancellationToken cancellationToken)
     {
         var userId = GetUserId();
-        var result = await _uploadService.ProcessAsync(files, userId, cancellationToken);
-        return ApiResponse<List<UploadBatchDto>>.Ok(result, "上传成功");
+        var result = await _uploadService.CreateBatchesAsync(files, userId, cancellationToken);
+        return ApiResponse<List<UploadBatchDto>>.Ok(result, "上传成功，正在后台解析");
     }
 
     [HttpGet("batch/{batchId:guid}")]

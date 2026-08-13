@@ -6,6 +6,8 @@ public interface IUploadBatchRepository
 {
     Task<UploadBatch?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 
+    Task<bool> ExistsByFileNameAsync(string fileName, CancellationToken cancellationToken);
+
     Task<List<UploadBatch>> ListAsync(int page, int pageSize, CancellationToken cancellationToken);
 
     Task<int> CountAsync(CancellationToken cancellationToken);

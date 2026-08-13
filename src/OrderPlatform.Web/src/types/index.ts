@@ -87,6 +87,8 @@ export interface UploadBatchDto {
   customerId: string | null;
   customerName: string | null;
   status: string;
+  progress: number;
+  errorMessage: string | null;
   parsed: boolean;
   orderCount: number;
   rawData: unknown;

@@ -5,13 +5,25 @@ import type {
   UploadBatchDto,
 } from '../types';
 
+export interface UploadProgress {
+  percent: number;
+}
+
 export const uploadApi = {
-  upload: (files: File[]) => {
+  upload: (
+    files: File[],
+    onProgress?: (progress: UploadProgress) => void,
+  ) => {
     const formData = new FormData();
     files.forEach((file) => formData.append('files', file));
     return http.post<UploadBatchDto[]>('/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 60000,
+      timeout: 120000,
+      onUploadProgress: (event) => {
+        if (onProgress && event.total) {
+          onProgress({ percent: Math.round((event.loaded / event.total) * 100) });
+        }
+      },
     });
   },
   batch: (batchId: string) => http.get<UploadBatchDto>(`/upload/batch/${batchId}`),

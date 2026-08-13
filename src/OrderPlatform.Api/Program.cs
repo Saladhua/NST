@@ -10,10 +10,11 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var logDirectory = builder.Configuration["Logging:LogDirectory"] ?? "logs";
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
     .WriteTo.Console()
-    .WriteTo.File("logs/log-.txt", rollingInterval: RollingInterval.Day)
+    .WriteTo.File(Path.Combine(logDirectory, "log-.txt"), rollingInterval: RollingInterval.Day)
     .CreateLogger();
 
 builder.Host.UseSerilog();
@@ -22,6 +23,7 @@ var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<Jw
 
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddApplication();
+builder.Services.AddHostedService<OrderPlatform.Api.Hosted.UploadProcessingService>();
 
 builder.Services.AddControllers(options =>
 {

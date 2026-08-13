@@ -7,6 +7,8 @@ public interface IOrderRepository
 {
     Task<OrderMain?> GetByIdAsync(Guid id, CancellationToken cancellationToken);
 
+    Task<OrderMain?> GetByOrderNoAsync(string orderNo, CancellationToken cancellationToken);
+
     Task<List<OrderMain>> QueryAsync(
         int page,
         int pageSize,

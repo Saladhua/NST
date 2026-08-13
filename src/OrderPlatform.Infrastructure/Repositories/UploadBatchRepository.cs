@@ -19,6 +19,11 @@ public class UploadBatchRepository : IUploadBatchRepository
         return _dbContext.UploadBatches.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
     }
 
+    public Task<bool> ExistsByFileNameAsync(string fileName, CancellationToken cancellationToken)
+    {
+        return _dbContext.UploadBatches.AnyAsync(x => x.FileName == fileName, cancellationToken);
+    }
+
     public Task<List<UploadBatch>> ListAsync(int page, int pageSize, CancellationToken cancellationToken)
     {
         return _dbContext.UploadBatches

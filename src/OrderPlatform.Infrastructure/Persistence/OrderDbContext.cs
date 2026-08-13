@@ -71,6 +71,7 @@ public class OrderDbContext : DbContext
         batch.Property(x => x.FileType).IsRequired().HasMaxLength(10);
         batch.Property(x => x.FileName).IsRequired().HasMaxLength(255);
         batch.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+        batch.Property(x => x.ErrorMessage).HasMaxLength(1000);
         batch.Property(x => x.RawDataJson);
         batch.Property(x => x.OriginalPath).IsRequired().HasMaxLength(500);
         batch.HasIndex(x => x.CustomerId);
@@ -88,7 +89,7 @@ public class OrderDbContext : DbContext
         order.ToTable("order_main");
         order.HasKey(x => x.Id);
         order.Property(x => x.OrderNo).IsRequired().HasMaxLength(50);
-        order.HasIndex(x => x.OrderNo);
+        order.HasIndex(x => x.OrderNo).IsUnique();
         order.Property(x => x.TotalQuantity).HasColumnType("decimal(18,4)");
         order.Property(x => x.TotalAmount).HasColumnType("decimal(18,2)");
         order.Property(x => x.ParseStatus).HasConversion<string>().HasMaxLength(20);
