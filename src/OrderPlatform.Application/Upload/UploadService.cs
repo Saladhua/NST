@@ -30,8 +30,6 @@ public interface IUploadService
 
     Task<List<OrderGeneratedDto>> GetBatchOrdersAsync(Guid batchId, CancellationToken cancellationToken);
 
-    Task DeleteBatchAsync(Guid batchId, CancellationToken cancellationToken);
-
     /// <summary>软删除客户资料，保留历史订单关联与图号。</summary>
     Task DeleteCustomerAsync(Guid customerId, CancellationToken cancellationToken);
 }
@@ -85,20 +83,12 @@ public class UploadService : IUploadService
             throw new BusinessException("同一批上传的文件须为同一类型（全部 PDF 或全部 Excel）");
         }
 
-        foreach (var file in fileList)
-        {
-            if (await _batchRepository.ExistsByFileNameAsync(file.FileName, cancellationToken))
-            {
-                throw new BusinessException($"文件「{file.FileName}」已上传过，请勿重复上传");
-            }
-        }
-
         var results = new List<UploadBatchDto>();
         foreach (var file in fileList)
         {
             var batch = await SaveFileAsync(file, userId, cancellationToken);
             _jobQueue.Enqueue(batch.Id);
-            results.Add(await ToDtoAsync(batch, cancellationToken));
+            results.Add(await ToDtoAsync(batch, 0, cancellationToken));
         }
 
         return results;
@@ -434,17 +424,19 @@ public class UploadService : IUploadService
     {
         var batch = await _batchRepository.GetByIdAsync(batchId, cancellationToken)
             ?? throw new BusinessException("批次不存在");
-        return await ToDtoAsync(batch, cancellationToken);
+        var counts = await _orderRepository.CountBySourceFileIdsAsync(new[] { batch.Id }, cancellationToken);
+        return await ToDtoAsync(batch, counts.GetValueOrDefault(batch.Id, 0), cancellationToken);
     }
 
     public async Task<PagedResult<UploadBatchDto>> ListBatchesAsync(int page, int pageSize, CancellationToken cancellationToken)
     {
         var batches = await _batchRepository.ListAsync(page, pageSize, cancellationToken);
         var total = await _batchRepository.CountAsync(cancellationToken);
+        var orderCounts = await _orderRepository.CountBySourceFileIdsAsync(batches.Select(b => b.Id), cancellationToken);
         var items = new List<UploadBatchDto>();
         foreach (var batch in batches)
         {
-            items.Add(await ToDtoAsync(batch, cancellationToken));
+            items.Add(await ToDtoAsync(batch, orderCounts.GetValueOrDefault(batch.Id, 0), cancellationToken));
         }
 
         return new PagedResult<UploadBatchDto>(items, total);
@@ -477,7 +469,7 @@ public class UploadService : IUploadService
     public async Task<List<CustomerImportDto>> GetCustomersAsync(CancellationToken cancellationToken)
     {
         var customers = await _customerRepository.ListAsync(cancellationToken);
-        var counts = await _partRepository.CountGroupByCustomerAsync(customers.Select(c => c.Id), cancellationToken);
+        var counts = await _orderRepository.CountMatchedPartNosByCustomersAsync(customers.Select(c => c.Id), cancellationToken);
         return customers.Select(c => new CustomerImportDto
         {
             CustomerId = c.Id,
@@ -529,44 +521,6 @@ public class UploadService : IUploadService
         return result;
     }
 
-    public async Task DeleteBatchAsync(Guid batchId, CancellationToken cancellationToken)
-    {
-        var batch = await _batchRepository.GetByIdAsync(batchId, cancellationToken)
-            ?? throw new BusinessException("批次不存在");
-
-        if (!string.IsNullOrEmpty(batch.OriginalPath))
-        {
-            var filePath = Path.Combine(_env.ContentRootPath, batch.OriginalPath);
-            if (File.Exists(filePath))
-            {
-                File.Delete(filePath);
-            }
-        }
-
-        // 订单保留，仅断开关联：来源批次、客户、匹配状态全部回到未关联
-        var orders = await _orderRepository.ListBySourceFileIdAsync(batch.Id, cancellationToken);
-        foreach (var order in orders)
-        {
-            order.SourceFileId = null;
-            order.CustomerId = Guid.Empty;
-            order.ParseStatus = MatchStatus.Unmatched;
-            foreach (var item in order.Items)
-            {
-                item.CustomerPartNo = string.Empty;
-                item.NestPartNo = string.Empty;
-                item.Alloy = string.Empty;
-                item.Spray = string.Empty;
-                item.Length = null;
-                item.MatchStatus = MatchStatus.Unmatched;
-            }
-
-            _orderRepository.Update(order);
-        }
-
-        _batchRepository.Delete(batch);
-        await _batchRepository.SaveChangesAsync(cancellationToken);
-    }
-
     public async Task DeleteCustomerAsync(Guid customerId, CancellationToken cancellationToken)
     {
         var customer = await _customerRepository.GetByIdAsync(customerId, cancellationToken)
@@ -576,7 +530,7 @@ public class UploadService : IUploadService
         await _customerRepository.SaveChangesAsync(cancellationToken);
     }
 
-    private async Task<UploadBatchDto> ToDtoAsync(UploadBatch batch, CancellationToken cancellationToken)
+    private async Task<UploadBatchDto> ToDtoAsync(UploadBatch batch, int orderCount, CancellationToken cancellationToken)
     {
         var dto = new UploadBatchDto
         {
@@ -588,6 +542,11 @@ public class UploadService : IUploadService
             Status = batch.Status.ToString(),
             Progress = batch.Progress,
             ErrorMessage = batch.ErrorMessage,
+            OrderCount = orderCount,
+            OrderDeleted = batch.FileType == "PDF"
+                && batch.Status == UploadStatus.Completed
+                && orderCount == 0
+                && !(batch.ErrorMessage?.Contains("已存在") ?? false),
             CreatedAt = batch.CreatedAt
         };
 

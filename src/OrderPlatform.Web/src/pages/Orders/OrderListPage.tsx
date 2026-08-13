@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { App, Button, Card, Input, Popconfirm, Select, Space, Table, Tag, Tooltip } from 'antd';
+import { App, Button, Card, Input, Select, Space, Table, Tag, Tooltip } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router';
 import dayjs from 'dayjs';
@@ -41,7 +41,7 @@ function pushStatusTag(status: PushStatus) {
 }
 
 export default function OrderListPage() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const navigate = useNavigate();
   const isAdmin = useAuthStore((s) => s.userInfo?.role === 'Admin');
 
@@ -107,6 +107,19 @@ export default function OrderListPage() {
     } catch {
       message.error('删除失败');
     }
+  };
+
+  const handleDeleteOrder = (record: OrderListDto) => {
+    modal.confirm({
+      title: '删除订单',
+      content: `确定删除订单「${record.orderNo}」吗？删除后不可恢复。`,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      transitionName: 'ant-fade',
+      maskTransitionName: 'ant-fade',
+      onOk: () => deleteOrder(record.id),
+    });
   };
 
   const columns = [
@@ -180,25 +193,16 @@ export default function OrderListPage() {
           </Button>
           {isAdmin && (
             <Tooltip title={record.pushStatus === 'Pushed' ? '已推送的订单不可删除' : ''}>
-              <Popconfirm
-                title="删除订单"
-                description={`确定删除订单「${record.orderNo}」吗？删除后不可恢复。`}
-                okText="删除"
-                okButtonProps={{ danger: true }}
-                cancelText="取消"
+              <Button
+                type="link"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
                 disabled={record.pushStatus === 'Pushed'}
-                onConfirm={() => void deleteOrder(record.id)}
+                onClick={() => handleDeleteOrder(record)}
               >
-                <Button
-                  type="link"
-                  size="small"
-                  danger
-                  icon={<DeleteOutlined />}
-                  disabled={record.pushStatus === 'Pushed'}
-                >
-                  删除
-                </Button>
-              </Popconfirm>
+                删除
+              </Button>
             </Tooltip>
           )}
         </Space>

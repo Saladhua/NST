@@ -14,10 +14,9 @@ import {
   Typography,
   Upload,
 } from 'antd';
-import { DeleteOutlined, InboxOutlined } from '@ant-design/icons';
+import { InboxOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { uploadApi } from '../../api/upload';
-import { useAuthStore } from '../../store/authStore';
 import type {
   CustomerImportDto,
   ExcelBatchDetailDto,
@@ -31,8 +30,7 @@ const POLL_INTERVAL = 1500;
 const PAGE_SIZE = 10;
 
 export default function UploadPage() {
-  const { message, modal } = App.useApp();
-  const isAdmin = useAuthStore((s) => s.userInfo?.role === 'Admin');
+  const { message } = App.useApp();
   const [uploading, setUploading] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [fileList, setFileList] = useState<UploadFile[]>([]);
@@ -64,30 +62,6 @@ export default function UploadPage() {
       // 失败静默，不阻塞主流程
     }
   }, []);
-
-  const deleteBatch = async (batchId: string) => {
-    try {
-      await uploadApi.deleteBatch(batchId);
-      message.success('删除成功');
-      void loadBatches(1);
-      void refreshCustomers();
-    } catch {
-      message.error('删除失败');
-    }
-  };
-
-  const handleDeleteBatch = (record: UploadBatchDto) => {
-    modal.confirm({
-      title: '删除上传记录',
-      content: '确定删除该记录及其文件吗？订单将保留并变为未关联。',
-      okText: '删除',
-      okButtonProps: { danger: true },
-      cancelText: '取消',
-      transitionName: 'ant-fade',
-      maskTransitionName: 'ant-fade',
-      onOk: () => deleteBatch(record.batchId),
-    });
-  };
 
   const stopPolling = () => {
     if (pollTimerRef.current !== null) {
@@ -194,7 +168,17 @@ export default function UploadPage() {
 
   const batchColumns = [
     { title: '批次号', dataIndex: 'batchNo', key: 'batchNo', width: 220 },
-    { title: '文件名', dataIndex: 'fileName', key: 'fileName' },
+    {
+      title: '文件名',
+      dataIndex: 'fileName',
+      key: 'fileName',
+      render: (value: string, record: UploadBatchDto) => (
+        <Space size={4}>
+          <span>{value}</span>
+          {record.orderDeleted && <Tag color="red">订单已删除</Tag>}
+        </Space>
+      ),
+    },
     { title: '类型', dataIndex: 'fileType', key: 'fileType', width: 80 },
     {
       title: '客户',
@@ -255,17 +239,6 @@ export default function UploadPage() {
           {record.fileType === 'PDF' && record.status === 'Completed' && (
             <Button size="small" type="link" onClick={() => void loadBatchOrders(record.batchId)}>
               查看明细
-            </Button>
-          )}
-          {isAdmin && (
-            <Button
-              size="small"
-              type="link"
-              danger
-              icon={<DeleteOutlined />}
-              onClick={() => handleDeleteBatch(record)}
-            >
-              删除
             </Button>
           )}
         </Space>

@@ -16,7 +16,5 @@ public interface IUploadBatchRepository
 
     void Update(UploadBatch batch);
 
-    void Delete(UploadBatch batch);
-
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }

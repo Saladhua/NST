@@ -24,6 +24,8 @@ public class UploadBatchDto
 
     public int OrderCount { get; set; }
 
+    public bool OrderDeleted { get; set; }
+
     public object? RawData { get; set; }
 
     public DateTime CreatedAt { get; set; }

@@ -91,6 +91,7 @@ export interface UploadBatchDto {
   errorMessage: string | null;
   parsed: boolean;
   orderCount: number;
+  orderDeleted: boolean;
   rawData: unknown;
   createdAt: string;
 }

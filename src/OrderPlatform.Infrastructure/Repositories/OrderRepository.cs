@@ -39,6 +39,25 @@ public class OrderRepository : IOrderRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<Dictionary<Guid, int>> CountBySourceFileIdsAsync(
+        IEnumerable<Guid> sourceFileIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = sourceFileIds as ICollection<Guid> ?? sourceFileIds.ToList();
+        if (ids.Count == 0)
+        {
+            return new Dictionary<Guid, int>();
+        }
+
+        var result = await _dbContext.Orders
+            .AsNoTracking()
+            .Where(x => x.SourceFileId.HasValue && ids.Contains(x.SourceFileId.Value))
+            .GroupBy(x => x.SourceFileId!.Value)
+            .Select(g => new { SourceFileId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.SourceFileId, x => x.Count, cancellationToken);
+        return result;
+    }
+
     public Task<List<OrderMain>> ListPendingMatchAsync(CancellationToken cancellationToken)
     {
         return _dbContext.Orders
@@ -129,9 +148,35 @@ public class OrderRepository : IOrderRepository
         }
 
         _dbContext.OrderItems.RemoveRange(order.Items);
+        var pushLogs = await _dbContext.OrderPushLogs
+            .Where(x => x.OrderId == id)
+            .ToListAsync(cancellationToken);
+        _dbContext.OrderPushLogs.RemoveRange(pushLogs);
         _dbContext.Orders.Remove(order);
         await _dbContext.SaveChangesAsync(cancellationToken);
         return true;
+    }
+
+    public async Task<Dictionary<Guid, int>> CountMatchedPartNosByCustomersAsync(
+        IEnumerable<Guid> customerIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = customerIds as ICollection<Guid> ?? customerIds.ToList();
+        if (ids.Count == 0)
+        {
+            return new Dictionary<Guid, int>();
+        }
+
+        var rows = await _dbContext.Orders
+            .AsNoTracking()
+            .Where(o => ids.Contains(o.CustomerId))
+            .SelectMany(o => o.Items, (o, i) => new { o.CustomerId, PartNo = i.CustomerPartNo })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .Where(x => !string.IsNullOrWhiteSpace(x.PartNo))
+            .GroupBy(x => x.CustomerId)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.PartNo).Distinct().Count());
     }
 
     public Task SaveChangesAsync(CancellationToken cancellationToken)

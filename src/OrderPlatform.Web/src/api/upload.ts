@@ -35,5 +35,4 @@ export const uploadApi = {
   customers: () => http.get<CustomerImportDto[]>('/upload/customers'),
   batchOrders: (batchId: string) =>
     http.get<OrderGeneratedDto[]>(`/upload/batch/${batchId}/orders`),
-  deleteBatch: (batchId: string) => http.delete<boolean>(`/upload/batch/${batchId}`),
 };

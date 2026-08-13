@@ -11,6 +11,10 @@ public interface IOrderRepository
 
     Task<List<OrderMain>> ListBySourceFileIdAsync(Guid sourceFileId, CancellationToken cancellationToken);
 
+    Task<Dictionary<Guid, int>> CountBySourceFileIdsAsync(
+        IEnumerable<Guid> sourceFileIds,
+        CancellationToken cancellationToken);
+
     Task<List<OrderMain>> ListPendingMatchAsync(CancellationToken cancellationToken);
 
     Task<List<OrderMain>> QueryAsync(
@@ -34,6 +38,10 @@ public interface IOrderRepository
     void Update(OrderMain order);
 
     Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken);
+
+    Task<Dictionary<Guid, int>> CountMatchedPartNosByCustomersAsync(
+        IEnumerable<Guid> customerIds,
+        CancellationToken cancellationToken);
 
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }
