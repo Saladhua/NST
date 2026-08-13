@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using OrderPlatform.Application.Orders;
 using OrderPlatform.Application.Parsers;
 using OrderPlatform.Application.Upload.Dtos;
 using OrderPlatform.Domain.Entities;
@@ -20,6 +21,10 @@ public interface IUploadService
     Task ProcessBatchAsync(Guid batchId, CancellationToken cancellationToken);
 
     Task<UploadBatchDto> GetBatchAsync(Guid batchId, CancellationToken cancellationToken);
+
+    Task<PagedResult<UploadBatchDto>> ListBatchesAsync(int page, int pageSize, CancellationToken cancellationToken);
+
+    Task<ExcelBatchDetailDto> GetBatchExcelAsync(Guid batchId, CancellationToken cancellationToken);
 
     Task<List<CustomerImportDto>> GetCustomersAsync(CancellationToken cancellationToken);
 
@@ -341,6 +346,43 @@ public class UploadService : IUploadService
         var batch = await _batchRepository.GetByIdAsync(batchId, cancellationToken)
             ?? throw new BusinessException("批次不存在");
         return await ToDtoAsync(batch, cancellationToken);
+    }
+
+    public async Task<PagedResult<UploadBatchDto>> ListBatchesAsync(int page, int pageSize, CancellationToken cancellationToken)
+    {
+        var batches = await _batchRepository.ListAsync(page, pageSize, cancellationToken);
+        var total = await _batchRepository.CountAsync(cancellationToken);
+        var items = new List<UploadBatchDto>();
+        foreach (var batch in batches)
+        {
+            items.Add(await ToDtoAsync(batch, cancellationToken));
+        }
+
+        return new PagedResult<UploadBatchDto>(items, total);
+    }
+
+    public async Task<ExcelBatchDetailDto> GetBatchExcelAsync(Guid batchId, CancellationToken cancellationToken)
+    {
+        var batch = await _batchRepository.GetByIdAsync(batchId, cancellationToken)
+            ?? throw new BusinessException("批次不存在");
+        if (batch.FileType != "Excel" || string.IsNullOrEmpty(batch.RawDataJson))
+        {
+            throw new BusinessException("该批次不是 Excel 文件或尚无解析数据");
+        }
+
+        var result = JsonSerializer.Deserialize<ExcelParseResult>(batch.RawDataJson);
+        return new ExcelBatchDetailDto
+        {
+            BatchId = batch.Id,
+            BatchNo = batch.BatchNo,
+            FileName = batch.FileName,
+            Sheets = result?.Sheets.Select(s => new ExcelSheetDetailDto
+            {
+                SheetName = s.SheetName,
+                Headers = s.Headers,
+                Rows = s.Rows
+            }).ToList() ?? new List<ExcelSheetDetailDto>()
+        };
     }
 
     public async Task<List<CustomerImportDto>> GetCustomersAsync(CancellationToken cancellationToken)

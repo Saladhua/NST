@@ -101,6 +101,19 @@ export interface CustomerImportDto {
   partCount: number;
 }
 
+export interface ExcelSheetDetailDto {
+  sheetName: string;
+  headers: string[];
+  rows: Record<string, string>[];
+}
+
+export interface ExcelBatchDetailDto {
+  batchId: string;
+  batchNo: string;
+  fileName: string;
+  sheets: ExcelSheetDetailDto[];
+}
+
 export interface OrderGeneratedDto {
   orderId: string;
   orderNo: string;

@@ -1,7 +1,9 @@
 import http from './http';
 import type {
   CustomerImportDto,
+  ExcelBatchDetailDto,
   OrderGeneratedDto,
+  PagedResult,
   UploadBatchDto,
 } from '../types';
 
@@ -27,6 +29,9 @@ export const uploadApi = {
     });
   },
   batch: (batchId: string) => http.get<UploadBatchDto>(`/upload/batch/${batchId}`),
+  batches: (page: number, pageSize: number) =>
+    http.get<PagedResult<UploadBatchDto>>('/upload/batches', { params: { page, pageSize } }),
+  batchExcel: (batchId: string) => http.get<ExcelBatchDetailDto>(`/upload/batch/${batchId}/excel`),
   customers: () => http.get<CustomerImportDto[]>('/upload/customers'),
   batchOrders: (batchId: string) =>
     http.get<OrderGeneratedDto[]>(`/upload/batch/${batchId}/orders`),

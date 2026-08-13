@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   App,
   Alert,
+  Button,
   Card,
   Divider,
+  Modal,
   Progress,
   Space,
   Table,
@@ -16,6 +18,7 @@ import type { UploadFile } from 'antd';
 import { uploadApi } from '../../api/upload';
 import type {
   CustomerImportDto,
+  ExcelBatchDetailDto,
   OrderGeneratedDto,
   UploadBatchDto,
 } from '../../types';
@@ -23,19 +26,35 @@ import type {
 const { Dragger } = Upload;
 
 const POLL_INTERVAL = 1500;
+const PAGE_SIZE = 10;
 
 export default function UploadPage() {
   const { message } = App.useApp();
   const [uploading, setUploading] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [batches, setBatches] = useState<UploadBatchDto[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [orders, setOrders] = useState<OrderGeneratedDto[]>([]);
   const [customers, setCustomers] = useState<CustomerImportDto[]>([]);
+  const [excelDetail, setExcelDetail] = useState<ExcelBatchDetailDto | null>(null);
+  const [excelLoading, setExcelLoading] = useState(false);
   const pollTimerRef = useRef<number | null>(null);
 
   const refreshCustomers = useCallback(async () => {
     try {
       setCustomers(await uploadApi.customers());
+    } catch {
+      // 失败静默，不阻塞主流程
+    }
+  }, []);
+
+  const loadBatches = useCallback(async (pageNum: number) => {
+    try {
+      const result = await uploadApi.batches(pageNum, PAGE_SIZE);
+      setBatches(result.items);
+      setTotal(result.total);
+      setPage(pageNum);
     } catch {
       // 失败静默，不阻塞主流程
     }
@@ -89,11 +108,12 @@ export default function UploadPage() {
       if (result.length === 0) {
         message.success('上传成功');
         void refreshCustomers();
+        void loadBatches(1);
         return;
       }
 
-      setBatches(result);
       const ids = result.map((b) => b.batchId);
+      void loadBatches(1);
       if (allFinished(result)) {
         await refreshBatches(ids);
         message.success('上传解析完成');
@@ -113,6 +133,7 @@ export default function UploadPage() {
           const failed = updated.filter((b) => b.status === 'Failed');
           message.success(failed.length === 0 ? '上传解析完成' : `解析完成，${failed.length} 个文件失败`);
           void refreshCustomers();
+          void loadBatches(1);
           if (updated.length > 0) {
             await loadBatchOrders(updated[0].batchId);
           }
@@ -124,6 +145,23 @@ export default function UploadPage() {
       setUploading(false);
     }
   };
+
+  const showExcelDetail = async (batchId: string) => {
+    setExcelLoading(true);
+    try {
+      const detail = await uploadApi.batchExcel(batchId);
+      setExcelDetail(detail);
+    } catch {
+      message.error('加载 Excel 数据失败');
+    } finally {
+      setExcelLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadBatches(1);
+    void refreshCustomers();
+  }, [loadBatches, refreshCustomers]);
 
   useEffect(() => stopPolling, []);
 
@@ -185,14 +223,21 @@ export default function UploadPage() {
     {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 180,
       render: (_: unknown, record: UploadBatchDto) => (
-        <Typography.Link
-          disabled={record.status !== 'Completed'}
-          onClick={() => void loadBatchOrders(record.batchId)}
-        >
-          查看明细
-        </Typography.Link>
+        <Space size={4}>
+          {record.fileType === 'Excel' && record.status === 'Completed' && (
+            <Button size="small" type="link" onClick={() => void showExcelDetail(record.batchId)}>
+              查看数据
+            </Button>
+          )}
+          <Typography.Link
+            disabled={record.status !== 'Completed'}
+            onClick={() => void loadBatchOrders(record.batchId)}
+          >
+            查看明细
+          </Typography.Link>
+        </Space>
       ),
     },
   ];
@@ -271,7 +316,7 @@ export default function UploadPage() {
           type="info"
           showIcon
           className="mb-4"
-          message="支持上传 PDF 订单、Excel 客户资料（含图号）。PDF 上传后将自动识别客户并解析订单明细。同名文件不可重复上传，重复订单号将自动跳过。"
+          message="每次只能上传一种类型：PDF 订单 或 Excel 客户资料（含图号），PDF 和 Excel 不能同时上传。PDF 上传后将自动识别客户并解析订单明细。同名文件不可重复上传，重复订单号将自动跳过。"
         />
         <Dragger
           multiple
@@ -289,7 +334,7 @@ export default function UploadPage() {
             <InboxOutlined />
           </p>
           <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
-          <p className="ant-upload-hint">支持 PDF / Excel，单文件不超过 50MB</p>
+          <p className="ant-upload-hint">支持 PDF / Excel，单文件不超过 50MB，一次只能选择一种类型</p>
         </Dragger>
         {uploading && (
           <Progress
@@ -302,13 +347,19 @@ export default function UploadPage() {
       </Card>
 
       {batches.length > 0 && (
-        <Card title="上传批次">
+        <Card title="上传记录">
           <Table<UploadBatchDto>
             rowKey="batchId"
             columns={batchColumns}
             dataSource={batches}
-            pagination={false}
             size="small"
+            pagination={{
+              current: page,
+              pageSize: PAGE_SIZE,
+              total,
+              showSizeChanger: false,
+              onChange: (p) => void loadBatches(p),
+            }}
           />
         </Card>
       )}
@@ -326,6 +377,35 @@ export default function UploadPage() {
       )}
 
       <Divider />
+
+      <Modal
+        title={excelDetail ? `Excel 数据：${excelDetail.fileName}` : 'Excel 数据'}
+        open={excelDetail !== null}
+        loading={excelLoading}
+        footer={null}
+        width={900}
+        onCancel={() => setExcelDetail(null)}
+      >
+        {excelDetail?.sheets.map((sheet) => (
+          <div key={sheet.sheetName} className="mb-4">
+            <Typography.Title level={5} className="mb-2">
+              {sheet.sheetName}
+            </Typography.Title>
+            <Table
+              rowKey={(_, index) => index ?? 0}
+              size="small"
+              dataSource={sheet.rows}
+              pagination={{ pageSize: 10, showSizeChanger: false }}
+              columns={sheet.headers.map((header) => ({
+                title: header,
+                dataIndex: header,
+                key: header,
+                ellipsis: true,
+              }))}
+            />
+          </div>
+        ))}
+      </Modal>
 
       <Card title="已导入客户资料" extra={<Typography.Text type="secondary">供 PDF 自动关联图号</Typography.Text>}>
         <Table<CustomerImportDto>

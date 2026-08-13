@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.IdentityModel.JsonWebTokens;
+using OrderPlatform.Application.Orders;
 using OrderPlatform.Application.Upload;
 using OrderPlatform.Application.Upload.Dtos;
 using OrderPlatform.Shared.Api;
@@ -35,6 +36,23 @@ public class UploadController : ControllerBase
     {
         var result = await _uploadService.GetBatchAsync(batchId, cancellationToken);
         return ApiResponse<UploadBatchDto>.Ok(result);
+    }
+
+    [HttpGet("batches")]
+    public async Task<ApiResponse<PagedResult<UploadBatchDto>>> Batches(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _uploadService.ListBatchesAsync(page, pageSize, cancellationToken);
+        return ApiResponse<PagedResult<UploadBatchDto>>.Ok(result);
+    }
+
+    [HttpGet("batch/{batchId:guid}/excel")]
+    public async Task<ApiResponse<ExcelBatchDetailDto>> BatchExcel(Guid batchId, CancellationToken cancellationToken)
+    {
+        var result = await _uploadService.GetBatchExcelAsync(batchId, cancellationToken);
+        return ApiResponse<ExcelBatchDetailDto>.Ok(result);
     }
 
     [HttpGet("customers")]
