@@ -1,0 +1,32 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# .NET 编译产物
+bin/
+obj/
+*.tsbuildinfo
+
+# 前端
+node_modules/
+dist/
+.vite/
+
+# 日志
+*.log
+logs/
+run_log.txt
+run_err.txt
+web_log.txt
+web_err.txt
+
+# 上传的测试文件（可能含客户订单数据）
+Uploads/
+
+# 数据库备份（含敏感数据）
+backups/
+
+# 操作系统
+.DS_Store
+Thumbs.db
