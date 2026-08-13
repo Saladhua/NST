@@ -420,14 +420,17 @@ export default function UploadPage() {
         )}
       </Modal>
 
-      <Card title="已导入客户资料" extra={<Typography.Text type="secondary">供 PDF 自动关联图号</Typography.Text>}>
+      <Card
+        title="客户图号统计"
+        extra={<Typography.Text type="secondary">按订单明细匹配统计的去重图号数</Typography.Text>}
+      >
         <Table<CustomerImportDto>
           rowKey="customerId"
           columns={customerColumns}
           dataSource={customers}
           pagination={false}
           size="small"
-          locale={{ emptyText: '暂无客户资料，请先上传 Excel' }}
+          locale={{ emptyText: '暂无匹配图号数据' }}
         />
       </Card>
     </div>
