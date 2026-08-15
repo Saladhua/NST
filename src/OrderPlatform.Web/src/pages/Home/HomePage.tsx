@@ -1,3 +1,4 @@
+// 首页（备用/直接访问 / 时的页面）：展示当前登录用户信息，支持修改密码与退出登录。
 import { useState } from 'react';
 import {
   App,
@@ -32,12 +33,14 @@ export default function HomePage() {
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm<ChangePasswordFormValues>();
 
+  // 退出登录：清空认证信息后跳转登录页
   const handleLogout = () => {
     clearAuth();
     message.success('已退出登录');
     navigate('/login', { replace: true });
   };
 
+  // 修改密码：成功则强制重新登录
   const handleChangePassword = async () => {
     try {
       const values = await form.validateFields();

@@ -12,6 +12,7 @@ using OrderPlatform.Shared.Api;
 
 namespace OrderPlatform.Application.Upload;
 
+/// <summary>上传服务接口：接收文件、后台解析批次、查询批次与统计。</summary>
 public interface IUploadService
 {
     /// <summary>接收上传：重名检查、保存文件、创建 Pending 批次并入队，立即返回批次列表。</summary>
@@ -20,20 +21,32 @@ public interface IUploadService
     /// <summary>后台解析指定批次，更新进度与状态。</summary>
     Task ProcessBatchAsync(Guid batchId, CancellationToken cancellationToken);
 
+    /// <summary>查询批次解析状态与进度。</summary>
     Task<UploadBatchDto> GetBatchAsync(Guid batchId, CancellationToken cancellationToken);
 
+    /// <summary>分页查询历史上传记录。</summary>
     Task<PagedResult<UploadBatchDto>> ListBatchesAsync(int page, int pageSize, CancellationToken cancellationToken);
 
+    /// <summary>查看 Excel 批次解析明细。</summary>
     Task<ExcelBatchDetailDto> GetBatchExcelAsync(Guid batchId, CancellationToken cancellationToken);
 
+    /// <summary>客户图号统计列表（客户 + 订单明细匹配去重图号数）。</summary>
     Task<List<CustomerImportDto>> GetCustomersAsync(CancellationToken cancellationToken);
 
+    /// <summary>查看 PDF 批次生成的订单。</summary>
     Task<List<OrderGeneratedDto>> GetBatchOrdersAsync(Guid batchId, CancellationToken cancellationToken);
 
     /// <summary>软删除客户资料，保留历史订单关联与图号。</summary>
     Task DeleteCustomerAsync(Guid customerId, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// 上传服务实现。核心流程：
+/// 1. 接收文件（PDF 订单 / Excel 客户资料），同名去重；
+/// 2. 创建上传批次并入内存队列，由后台服务异步解析；
+/// 3. PDF → 解析订单明细并匹配客户图号生成订单；Excel → 重建客户图号资料；
+/// 4. Excel 导入后回头对未关联订单执行补匹配。
+/// </summary>
 public class UploadService : IUploadService
 {
     private const string RootDirectory = "Uploads";
@@ -69,6 +82,9 @@ public class UploadService : IUploadService
         _logger = logger;
     }
 
+    /// <summary>
+    /// 接收上传：校验文件非空、同批同类型，逐个保存并创建批次、入队，返回批次列表。
+    /// </summary>
     public async Task<List<UploadBatchDto>> CreateBatchesAsync(IEnumerable<IFormFile> files, Guid userId, CancellationToken cancellationToken)
     {
         var fileList = files.Where(f => f.Length > 0).ToList();
@@ -77,6 +93,7 @@ public class UploadService : IUploadService
             throw new BusinessException("未接收到有效文件");
         }
 
+        // 一次上传只能为同一类型（全部 PDF 或全部 Excel）
         var group = fileList.GroupBy(f => GetFileType(f.FileName)).ToList();
         if (group.Count > 1)
         {
@@ -94,6 +111,7 @@ public class UploadService : IUploadService
         return results;
     }
 
+    /// <summary>解析批次：更新为 Parsing 状态，按文件类型分派解析，完成后更新状态与进度。</summary>
     public async Task ProcessBatchAsync(Guid batchId, CancellationToken cancellationToken)
     {
         var batch = await _batchRepository.GetByIdAsync(batchId, cancellationToken)
@@ -130,6 +148,7 @@ public class UploadService : IUploadService
         await _batchRepository.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>保存文件：创建批次记录（Pending），将文件写入 Uploads/yyyy/MM/dd 目录。</summary>
     private async Task<UploadBatch> SaveFileAsync(IFormFile file, Guid userId, CancellationToken cancellationToken)
     {
         var fileType = GetFileType(file.FileName);
@@ -149,6 +168,7 @@ public class UploadService : IUploadService
         await _batchRepository.AddAsync(batch, cancellationToken);
         await _batchRepository.SaveChangesAsync(cancellationToken);
 
+        // 按日期分目录保存，文件名使用 GUID 避免重名覆盖
         var dir = Path.Combine(_env.ContentRootPath, RootDirectory, DateTime.Now.ToString("yyyy"), DateTime.Now.ToString("MM"), DateTime.Now.ToString("dd"));
         Directory.CreateDirectory(dir);
         var savedName = $"{Guid.NewGuid():N}{Path.GetExtension(file.FileName)}";
@@ -164,6 +184,7 @@ public class UploadService : IUploadService
         return batch;
     }
 
+    /// <summary>解析 Excel 客户资料：每个 sheet 视为一个客户，重建其图号资料，并补匹配历史未关联订单。</summary>
     private async Task ProcessExcelAsync(UploadBatch batch, string savedPath, CancellationToken cancellationToken)
     {
         var result = await _excelParser.ParseAsync(savedPath, cancellationToken);
@@ -172,6 +193,7 @@ public class UploadService : IUploadService
 
         foreach (var sheet in result.Sheets)
         {
+            // sheet 名即客户名，不存在则新建客户
             var customer = await _customerRepository.GetByNameAsync(sheet.SheetName, cancellationToken);
             if (customer is null)
             {
@@ -184,7 +206,7 @@ public class UploadService : IUploadService
                 await _customerRepository.AddAsync(customer, cancellationToken);
             }
 
-            // 重建该客户的图号资料
+            // 重建该客户的图号资料（先清后插，保证与 Excel 一致）
             await _partRepository.DeleteByCustomerAsync(customer.Id, cancellationToken);
             var parts = new List<CustomerPart>();
             foreach (var row in sheet.Rows)
@@ -192,6 +214,7 @@ public class UploadService : IUploadService
                 var nest = Get(row, "NEST图号") ?? string.Empty;
                 var customerPartNo = Get(row, "客户图号") ?? Get(row, "客户新图号") ?? string.Empty;
                 var spec = Get(row, "规格") ?? string.Empty;
+                // 图号、客户图号、规格全为空的行视为无效行，跳过
                 if (string.IsNullOrEmpty(nest) && string.IsNullOrEmpty(customerPartNo) && string.IsNullOrEmpty(spec))
                 {
                     continue;
@@ -225,6 +248,7 @@ public class UploadService : IUploadService
         await RematchPendingOrdersAsync(cancellationToken);
     }
 
+    /// <summary>补匹配：对未完全关联的订单，依据其 PDF 原始 JSON 重新匹配最新客户图号资料。</summary>
     private async Task RematchPendingOrdersAsync(CancellationToken cancellationToken)
     {
         var orders = await _orderRepository.ListPendingMatchAsync(cancellationToken);
@@ -282,12 +306,14 @@ public class UploadService : IUploadService
                 continue;
             }
 
+            // 根据匹配结果汇总订单关联状态
             order.ParseStatus = allMatched
                 ? MatchStatus.Matched
                 : order.Items.Any(i => i.MatchStatus == MatchStatus.Matched)
                     ? MatchStatus.Partial
                     : MatchStatus.Unmatched;
 
+            // 同步来源批次上的客户
             if (order.SourceFileId.HasValue)
             {
                 var batch = await _batchRepository.GetByIdAsync(order.SourceFileId.Value, cancellationToken);
@@ -305,6 +331,7 @@ public class UploadService : IUploadService
         await _orderRepository.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>解析 PDF 订单：提取订单号/客户/明细，去重后匹配图号并生成订单。</summary>
     private async Task ProcessPdfAsync(UploadBatch batch, string savedPath, CancellationToken cancellationToken)
     {
         var pdf = await _pdfParser.ParseAsync(savedPath, cancellationToken);
@@ -341,6 +368,7 @@ public class UploadService : IUploadService
             ? new List<CustomerPart>()
             : await _partRepository.ListByCustomerAsync(customer.Id, cancellationToken);
 
+        // 逐行解析明细并匹配客户图号
         var allMatched = true;
         foreach (var row in pdf.Rows)
         {
@@ -375,6 +403,7 @@ public class UploadService : IUploadService
 
         if (order.Items.Count > 0)
         {
+            // 汇总订单关联状态与合计
             if (allMatched)
             {
                 order.ParseStatus = MatchStatus.Matched;
@@ -398,6 +427,7 @@ public class UploadService : IUploadService
         batch.RawDataJson = JsonSerializer.Serialize(pdf);
     }
 
+    /// <summary>按客户名识别客户：先精确匹配，再尝试包含匹配。</summary>
     private async Task<Customer?> FindCustomerAsync(string buyerName, string fileName, CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(buyerName))
@@ -420,6 +450,7 @@ public class UploadService : IUploadService
         return null;
     }
 
+    /// <summary>查询单批次状态（含生成的订单数）。</summary>
     public async Task<UploadBatchDto> GetBatchAsync(Guid batchId, CancellationToken cancellationToken)
     {
         var batch = await _batchRepository.GetByIdAsync(batchId, cancellationToken)
@@ -428,6 +459,7 @@ public class UploadService : IUploadService
         return await ToDtoAsync(batch, counts.GetValueOrDefault(batch.Id, 0), cancellationToken);
     }
 
+    /// <summary>分页查询历史上传记录（含各批次生成的订单数）。</summary>
     public async Task<PagedResult<UploadBatchDto>> ListBatchesAsync(int page, int pageSize, CancellationToken cancellationToken)
     {
         var batches = await _batchRepository.ListAsync(page, pageSize, cancellationToken);
@@ -442,6 +474,7 @@ public class UploadService : IUploadService
         return new PagedResult<UploadBatchDto>(items, total);
     }
 
+    /// <summary>查看 Excel 批次解析明细（从 RawDataJson 反序列化）。</summary>
     public async Task<ExcelBatchDetailDto> GetBatchExcelAsync(Guid batchId, CancellationToken cancellationToken)
     {
         var batch = await _batchRepository.GetByIdAsync(batchId, cancellationToken)
@@ -466,6 +499,7 @@ public class UploadService : IUploadService
         };
     }
 
+    /// <summary>客户图号统计：按订单明细中已匹配的去重客户图号数统计。</summary>
     public async Task<List<CustomerImportDto>> GetCustomersAsync(CancellationToken cancellationToken)
     {
         var customers = await _customerRepository.ListAsync(cancellationToken);
@@ -478,6 +512,7 @@ public class UploadService : IUploadService
         }).ToList();
     }
 
+    /// <summary>查看 PDF 批次生成的订单（订单与批次通过 SourceFileId 关联）。</summary>
     public async Task<List<OrderGeneratedDto>> GetBatchOrdersAsync(Guid batchId, CancellationToken cancellationToken)
     {
         // 订单与批次通过 SourceFileId 关联，查询该批次生成的真实入库订单
@@ -521,6 +556,7 @@ public class UploadService : IUploadService
         return result;
     }
 
+    /// <summary>软删除客户（保留历史订单关联与图号统计）。</summary>
     public async Task DeleteCustomerAsync(Guid customerId, CancellationToken cancellationToken)
     {
         var customer = await _customerRepository.GetByIdAsync(customerId, cancellationToken)
@@ -530,6 +566,7 @@ public class UploadService : IUploadService
         await _customerRepository.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>批次实体转 DTO，计算订单删除标记（已完成但无订单且非重复导入）。</summary>
     private async Task<UploadBatchDto> ToDtoAsync(UploadBatch batch, int orderCount, CancellationToken cancellationToken)
     {
         var dto = new UploadBatchDto
@@ -559,6 +596,7 @@ public class UploadService : IUploadService
         return dto;
     }
 
+    /// <summary>按扩展名判断文件类型。</summary>
     private static string GetFileType(string fileName)
     {
         var ext = Path.GetExtension(fileName).ToLowerInvariant();
@@ -570,6 +608,7 @@ public class UploadService : IUploadService
         };
     }
 
+    /// <summary>从行字典中按列名取值（忽略列名首尾空格）。</summary>
     private static string? Get(Dictionary<string, string> row, string key)
     {
         foreach (var (k, v) in row)
@@ -583,6 +622,7 @@ public class UploadService : IUploadService
         return null;
     }
 
+    /// <summary>解析可空小数（去除千分位逗号）。</summary>
     private static decimal? ParseNullableDecimal(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))

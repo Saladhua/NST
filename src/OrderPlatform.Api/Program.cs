@@ -8,8 +8,10 @@ using OrderPlatform.Infrastructure.Persistence;
 using OrderPlatform.Infrastructure.Security;
 using Serilog;
 
+// 应用启动入口：完成日志、配置、依赖注入、中间件装配。
 var builder = WebApplication.CreateBuilder(args);
 
+// 配置 Serilog：控制台 + 文件（按天滚动）
 var logDirectory = builder.Configuration["Logging:LogDirectory"] ?? "logs";
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
@@ -19,12 +21,17 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
+// 读取 JWT 配置
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
 
+// 注册基础设施层（EF Core、仓储、安全服务）与应用层（业务服务、解析器、任务队列）
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddApplication();
+
+// 后台服务：消费上传任务队列，异步解析上传批次
 builder.Services.AddHostedService<OrderPlatform.Api.Hosted.UploadProcessingService>();
 
+// MVC：统一返回过滤器 + 全局异常过滤器 + 枚举转字符串序列化
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add<OrderPlatform.Api.Filters.ApiResponseFilter>();
@@ -37,6 +44,7 @@ builder.Services.AddControllers(options =>
     options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 
+// JWT Bearer 认证
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -46,6 +54,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
+// Swagger（含 Bearer 认证配置）
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -82,6 +91,7 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// 跨域（技术验证版放开所有来源）
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -92,6 +102,7 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// 启动时自动迁移数据库并写入种子数据（管理员、示例客户图号）
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<OrderDbContext>();
@@ -99,15 +110,18 @@ using (var scope = app.Services.CreateScope())
     await DbSeeder.SeedAsync(dbContext);
 }
 
+// 请求日志、跨域
 app.UseSerilogRequestLogging();
 app.UseCors();
 
+// 仅开发环境启用 Swagger
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
+// 认证与授权中间件
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

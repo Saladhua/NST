@@ -3,6 +3,7 @@ using OrderPlatform.Application.Auth.Dtos;
 
 namespace OrderPlatform.Application.Validators;
 
+/// <summary>登录请求校验器。</summary>
 public class LoginRequestValidator : AbstractValidator<LoginRequest>
 {
     public LoginRequestValidator()

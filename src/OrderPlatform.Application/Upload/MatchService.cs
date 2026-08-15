@@ -14,8 +14,12 @@ namespace OrderPlatform.Application.Upload;
 /// </summary>
 public static class MatchService
 {
+    /// <summary>匹配「外径×壁厚」规格前缀的正则，如 16*1.4。</summary>
     private static readonly Regex SpecPrefixRegex = new(@"^(\d+(?:\.\d+)?)\s*\*\s*(\d+(?:\.\d+)?)");
 
+    /// <summary>
+    /// 对单行 PDF 明细执行匹配，返回命中（或未命中）的客户图号、NEST 图号等信息。
+    /// </summary>
     public static (string customerPartNo, string nestPartNo, string alloy, string spray, decimal? length, MatchStatus status)
         Match(PdfParseRow row, List<CustomerPart> parts)
     {
@@ -49,6 +53,7 @@ public static class MatchService
                 })
                 .ToList();
 
+            // 仅当唯一命中时才算匹配，避免歧义
             if (candidates.Count == 1)
             {
                 var c = candidates[0];

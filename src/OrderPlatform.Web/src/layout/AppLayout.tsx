@@ -1,3 +1,5 @@
+// 主布局组件：左侧侧边栏菜单 + 顶部用户信息区 + 内容区（Outlet 渲染子路由）。
+// 菜单根据当前用户角色动态渲染，普通用户不显示「用户管理」「系统设置」。
 import { useState } from 'react';
 import {
   App,
@@ -36,6 +38,7 @@ interface ChangePasswordFormValues {
 
 export default function AppLayout() {
   const navigate = useNavigate();
+  // 当前路由信息，用于高亮侧边栏选中项
   const location = useLocation();
   const { message } = App.useApp();
   const { token } = theme.useToken();
@@ -59,12 +62,14 @@ export default function AppLayout() {
       : []),
   ];
 
+  // 退出登录：清空认证信息后跳回登录页
   const handleLogout = () => {
     clearAuth();
     message.success('已退出登录');
     navigate('/login', { replace: true });
   };
 
+  // 修改密码：成功后强制重新登录
   const handleChangePassword = async () => {
     try {
       const values = await form.validateFields();
@@ -102,6 +107,7 @@ export default function AppLayout() {
     },
   ];
 
+  // 根据当前路径匹配侧边栏高亮的菜单项（支持 /orders/:id 这类子路径）
   const selectedKey = menuItems
     .map((item) => item.key)
     .find((key) => location.pathname === key || location.pathname.startsWith(`${key}/`));

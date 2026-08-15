@@ -1,3 +1,5 @@
+// 数据看板：展示订单总数、今日订单、待推送、合作客户等统计卡片，
+// 以及客户订单统计表和最近订单表。
 import { useEffect, useState } from 'react';
 import {
   App,
@@ -27,6 +29,7 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardSummaryDto | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // 加载看板汇总数据
   useEffect(() => {
     const load = async () => {
       setLoading(true);

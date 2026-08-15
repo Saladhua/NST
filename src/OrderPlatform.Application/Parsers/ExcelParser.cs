@@ -2,11 +2,16 @@ using ClosedXML.Excel;
 
 namespace OrderPlatform.Application.Parsers;
 
+/// <summary>Excel 解析器接口。</summary>
 public interface IExcelParser
 {
     Task<ExcelParseResult> ParseAsync(string filePath, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// 基于 ClosedXML 的 Excel 客户资料解析器。
+/// 约定：每个 sheet 对应一个客户，sheet 名即客户名；第一行为表头，其后为数据行。
+/// </summary>
 public class ExcelParser : IExcelParser
 {
     public Task<ExcelParseResult> ParseAsync(string filePath, CancellationToken cancellationToken)
@@ -14,6 +19,7 @@ public class ExcelParser : IExcelParser
         return Task.FromResult(Parse(filePath));
     }
 
+    /// <summary>解析整个工作簿：逐 sheet 读取表头与数据行。</summary>
     public static ExcelParseResult Parse(string filePath)
     {
         var result = new ExcelParseResult();
@@ -43,7 +49,7 @@ public class ExcelParser : IExcelParser
                 data.Headers.Add(TrimCell(cell));
             }
 
-            // 数据行：从第二行开始
+            // 数据行：从第二行开始，忽略全空行
             for (var rowNum = firstRow + 1; rowNum <= usedRows.LastRow().RowNumber(); rowNum++)
             {
                 var dict = new Dictionary<string, string>();
@@ -72,6 +78,7 @@ public class ExcelParser : IExcelParser
         return result;
     }
 
+    /// <summary>读取单元格文本并去除首尾空白。</summary>
     private static string TrimCell(IXLCell cell)
     {
         var value = cell.GetString();

@@ -4,6 +4,7 @@ using OrderPlatform.Application.Config;
 
 namespace OrderPlatform.Api.Controllers;
 
+/// <summary>系统配置接口（仅管理员）。</summary>
 [ApiController]
 [Route("api/config")]
 [Authorize]
@@ -16,6 +17,7 @@ public class ConfigController : ControllerBase
         _configService = configService;
     }
 
+    /// <summary>配置列表。</summary>
     [HttpGet]
     [Authorize(Roles = "Admin")]
     public async Task<OrderPlatform.Shared.Api.ApiResponse<List<ConfigItemDto>>> List(CancellationToken cancellationToken)
@@ -24,6 +26,7 @@ public class ConfigController : ControllerBase
         return OrderPlatform.Shared.Api.ApiResponse<List<ConfigItemDto>>.Ok(result);
     }
 
+    /// <summary>更新配置值。</summary>
     [HttpPut("{id:guid}")]
     [Authorize(Roles = "Admin")]
     public async Task<OrderPlatform.Shared.Api.ApiResponse<object>> Update(Guid id, UpdateConfigRequest request, CancellationToken cancellationToken)

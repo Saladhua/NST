@@ -5,6 +5,10 @@ using OrderPlatform.Application.Upload;
 
 namespace OrderPlatform.Api.Hosted;
 
+/// <summary>
+/// 上传解析后台服务：从任务队列中不断取出批次 ID 并调用上传服务解析。
+/// 通过独立作用域获取 IUploadService，避免与请求作用域冲突。
+/// </summary>
 public class UploadProcessingService : BackgroundService
 {
     private readonly IUploadJobQueue _jobQueue;
@@ -25,6 +29,7 @@ public class UploadProcessingService : BackgroundService
     {
         _logger.LogInformation("上传解析服务已启动");
 
+        // 循环消费队列，直到应用停止
         while (!stoppingToken.IsCancellationRequested)
         {
             var batchId = await _jobQueue.DequeueAsync(stoppingToken);

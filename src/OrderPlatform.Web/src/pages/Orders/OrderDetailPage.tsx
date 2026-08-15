@@ -1,3 +1,4 @@
+// 订单详情页：展示订单头信息与明细行，可刷新详情、推送订单。
 import { useCallback, useEffect, useState } from 'react';
 import {
   App,
@@ -33,6 +34,7 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(false);
   const [pushing, setPushing] = useState(false);
 
+  // 加载订单详情
   const load = useCallback(async () => {
     if (!id) {
       return;
@@ -51,6 +53,7 @@ export default function OrderDetailPage() {
     void load();
   }, [load]);
 
+  // 推送当前订单
   const pushOrder = async () => {
     if (!id) {
       return;
@@ -103,6 +106,7 @@ export default function OrderDetailPage() {
     },
   ];
 
+  // 已关联明细行数（用于展示关联占比）
   const matchedCount = detail?.items.filter((i) => i.matchStatus === 'Matched').length ?? 0;
 
   return (

@@ -3,6 +3,7 @@ using OrderPlatform.Application.Auth.Dtos;
 
 namespace OrderPlatform.Application.Validators;
 
+/// <summary>修改密码请求校验器。</summary>
 public class ChangePasswordRequestValidator : AbstractValidator<ChangePasswordRequest>
 {
     public ChangePasswordRequestValidator()

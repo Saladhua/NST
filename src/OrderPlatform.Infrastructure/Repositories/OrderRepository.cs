@@ -6,6 +6,7 @@ using OrderPlatform.Infrastructure.Persistence;
 
 namespace OrderPlatform.Infrastructure.Repositories;
 
+/// <summary>订单仓储实现：订单查询、筛选、新增、删除（联动明细与推送日志）。</summary>
 public class OrderRepository : IOrderRepository
 {
     private readonly OrderDbContext _dbContext;
@@ -15,6 +16,7 @@ public class OrderRepository : IOrderRepository
         _dbContext = dbContext;
     }
 
+    /// <summary>按 ID 查询订单（含明细）。</summary>
     public Task<OrderMain?> GetByIdAsync(Guid id, CancellationToken cancellationToken)
     {
         return _dbContext.Orders
@@ -22,6 +24,7 @@ public class OrderRepository : IOrderRepository
             .FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
     }
 
+    /// <summary>按订单号查询订单（含明细），用于重复导入去重。</summary>
     public Task<OrderMain?> GetByOrderNoAsync(string orderNo, CancellationToken cancellationToken)
     {
         return _dbContext.Orders
@@ -29,6 +32,7 @@ public class OrderRepository : IOrderRepository
             .FirstOrDefaultAsync(x => x.OrderNo == orderNo, cancellationToken);
     }
 
+    /// <summary>按来源批次查询订单（含明细），按创建时间倒序。</summary>
     public Task<List<OrderMain>> ListBySourceFileIdAsync(Guid sourceFileId, CancellationToken cancellationToken)
     {
         return _dbContext.Orders
@@ -39,6 +43,7 @@ public class OrderRepository : IOrderRepository
             .ToListAsync(cancellationToken);
     }
 
+    /// <summary>批量统计各来源批次生成的订单数。</summary>
     public async Task<Dictionary<Guid, int>> CountBySourceFileIdsAsync(
         IEnumerable<Guid> sourceFileIds,
         CancellationToken cancellationToken)
@@ -58,6 +63,7 @@ public class OrderRepository : IOrderRepository
         return result;
     }
 
+    /// <summary>查询未完全关联的订单（用于 Excel 导入后补匹配）。</summary>
     public Task<List<OrderMain>> ListPendingMatchAsync(CancellationToken cancellationToken)
     {
         return _dbContext.Orders
@@ -67,6 +73,7 @@ public class OrderRepository : IOrderRepository
             .ToListAsync(cancellationToken);
     }
 
+    /// <summary>应用订单筛选条件（关键词/客户/推送状态/关联状态）。</summary>
     private IQueryable<OrderMain> ApplyFilter(
         IQueryable<OrderMain> query,
         string? keyword,
@@ -97,6 +104,7 @@ public class OrderRepository : IOrderRepository
         return query;
     }
 
+    /// <summary>分页查询订单列表（按创建时间倒序）。</summary>
     public Task<List<OrderMain>> QueryAsync(
         int page,
         int pageSize,
@@ -115,6 +123,7 @@ public class OrderRepository : IOrderRepository
             .ToListAsync(cancellationToken);
     }
 
+    /// <summary>统计筛选条件下的订单总数。</summary>
     public Task<int> CountAsync(
         string? keyword,
         Guid? customerId,
@@ -127,16 +136,19 @@ public class OrderRepository : IOrderRepository
         return query.CountAsync(cancellationToken);
     }
 
+    /// <summary>新增订单。</summary>
     public async Task AddAsync(OrderMain order, CancellationToken cancellationToken)
     {
         await _dbContext.Orders.AddAsync(order, cancellationToken);
     }
 
+    /// <summary>更新订单。</summary>
     public void Update(OrderMain order)
     {
         _dbContext.Orders.Update(order);
     }
 
+    /// <summary>删除订单，并联动清理其明细与推送日志。</summary>
     public async Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken)
     {
         var order = await _dbContext.Orders
@@ -157,6 +169,7 @@ public class OrderRepository : IOrderRepository
         return true;
     }
 
+    /// <summary>按客户统计订单明细中已匹配（非空客户图号）的去重图号数量。</summary>
     public async Task<Dictionary<Guid, int>> CountMatchedPartNosByCustomersAsync(
         IEnumerable<Guid> customerIds,
         CancellationToken cancellationToken)
@@ -179,6 +192,7 @@ public class OrderRepository : IOrderRepository
             .ToDictionary(g => g.Key, g => g.Select(x => x.PartNo).Distinct().Count());
     }
 
+    /// <summary>保存变更。</summary>
     public Task SaveChangesAsync(CancellationToken cancellationToken)
     {
         return _dbContext.SaveChangesAsync(cancellationToken);

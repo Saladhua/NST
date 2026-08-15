@@ -9,6 +9,7 @@ using OrderPlatform.Domain.Entities;
 
 namespace OrderPlatform.Infrastructure.Security;
 
+/// <summary>JWT 令牌服务实现：签发访问令牌与刷新令牌、校验刷新令牌。</summary>
 public class JwtTokenService : ITokenService
 {
     private readonly JwtOptions _options;
@@ -22,8 +23,10 @@ public class JwtTokenService : ITokenService
         _logger = logger;
     }
 
+    /// <summary>访问令牌有效期（分钟）。</summary>
     public int AccessTokenExpireMinutes => _options.AccessTokenExpireMinutes;
 
+    /// <summary>签发访问令牌：含用户 ID、用户名、角色声明。</summary>
     public string GenerateAccessToken(User user)
     {
         var now = DateTime.Now;
@@ -38,6 +41,7 @@ public class JwtTokenService : ITokenService
         return GenerateToken(claims, now, now.AddMinutes(_options.AccessTokenExpireMinutes));
     }
 
+    /// <summary>签发刷新令牌：仅含用户 ID。</summary>
     public string GenerateRefreshToken(User user)
     {
         var now = DateTime.Now;
@@ -50,6 +54,7 @@ public class JwtTokenService : ITokenService
         return GenerateToken(claims, now, now.AddDays(_options.RefreshTokenExpireDays));
     }
 
+    /// <summary>校验刷新令牌：合法且类型为 refresh 时返回声明主体，否则返回 null。</summary>
     public ClaimsPrincipal? ValidateRefreshToken(string refreshToken)
     {
         try
@@ -72,6 +77,7 @@ public class JwtTokenService : ITokenService
         }
     }
 
+    /// <summary>按 HS256 生成并序列化 JWT。</summary>
     private string GenerateToken(IEnumerable<Claim> claims, DateTime notBefore, DateTime expires)
     {
         var token = new JwtSecurityToken(

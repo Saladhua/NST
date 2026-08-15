@@ -6,8 +6,10 @@ using OrderPlatform.Domain.Enums;
 
 namespace OrderPlatform.Infrastructure.Persistence;
 
+/// <summary>数据库种子数据：启动时创建管理员账号与示例客户图号资料。</summary>
 public static class DbSeeder
 {
+    /// <summary>种子 JSON 中的客户图号数据行。</summary>
     private sealed class CustomerPartSeed
     {
         public string Customer { get; set; } = string.Empty;
@@ -19,12 +21,14 @@ public static class DbSeeder
         public decimal? Length { get; set; }
     }
 
+    /// <summary>执行全部种子逻辑。</summary>
     public static async Task SeedAsync(OrderDbContext dbContext)
     {
         await SeedAdminAsync(dbContext);
         await SeedCustomersAsync(dbContext);
     }
 
+    /// <summary>写入默认管理员 admin / 123456（已存在则跳过）。</summary>
     private static async Task SeedAdminAsync(OrderDbContext dbContext)
     {
         if (await dbContext.Users.AnyAsync(x => x.UserName == "admin"))
@@ -48,6 +52,7 @@ public static class DbSeeder
         await dbContext.SaveChangesAsync();
     }
 
+    /// <summary>从 SeedData/customer_parts.json 导入示例客户图号资料（已有客户数据则跳过）。</summary>
     private static async Task SeedCustomersAsync(OrderDbContext dbContext)
     {
         if (await dbContext.Customers.AnyAsync())
@@ -61,6 +66,7 @@ public static class DbSeeder
             return;
         }
 
+        // 解析种子 JSON，失败时静默跳过
         List<CustomerPartSeed>? seeds;
         try
         {
@@ -78,6 +84,7 @@ public static class DbSeeder
             return;
         }
 
+        // 先去重生成客户，再生成对应的图号资料
         var now = DateTime.Now;
         var customers = seeds
             .Select(x => x.Customer)

@@ -4,13 +4,19 @@ using UglyToad.PdfPig;
 
 namespace OrderPlatform.Application.Parsers;
 
+/// <summary>PDF 解析器接口。</summary>
 public interface IPdfParser
 {
     Task<PdfParseResult> ParseAsync(string filePath, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// 基于 PdfPig 的 PDF 采购订单解析器。
+/// 通过文字的坐标位置将页面拆分为表格，兼容两类订单布局（华尔达 / 马鞍山仪达）。
+/// </summary>
 public partial class PdfParser : IPdfParser
 {
+    /// <summary>行聚类阈值：同一行内词的 y 坐标允许的最大差距。</summary>
     private const double RowClusterThreshold = 10;
     private static readonly Regex OrderNoRegex = OrderNoPattern();
     private static readonly Regex DateCnRegex = DateCnPattern();
@@ -24,6 +30,7 @@ public partial class PdfParser : IPdfParser
         return Task.FromResult(Parse(filePath));
     }
 
+    /// <summary>解析 PDF：逐页提取订单号、日期、采购方与表格明细。</summary>
     public static PdfParseResult Parse(string filePath)
     {
         var result = new PdfParseResult();
@@ -34,6 +41,7 @@ public partial class PdfParser : IPdfParser
             var rawText = page.Text;
             result.RawText += rawText + "\n";
 
+            // 页面级信息只在首次命中时写入
             result.OrderNo = string.IsNullOrEmpty(result.OrderNo) ? ExtractOrderNo(rawText) : result.OrderNo;
             result.OrderDate ??= ExtractOrderDate(rawText);
             result.BuyerName = string.IsNullOrEmpty(result.BuyerName) ? ExtractBuyerName(rawText) : result.BuyerName;
@@ -51,6 +59,7 @@ public partial class PdfParser : IPdfParser
     /// </summary>
     private static void ParseTable(UglyToad.PdfPig.Content.Page page, PdfParseResult result)
     {
+        // 提取页面文字词并归一化坐标（左上为原点）
         var words = page.GetWords()
             .Where(w => !string.IsNullOrWhiteSpace(w.Text))
             .Select(w => new WordItem
@@ -82,10 +91,11 @@ public partial class PdfParser : IPdfParser
             .OrderBy(w => w.X)
             .ToList();
 
+        // 通过「行号」表头判断是否为布局B（马鞍山仪达）
         var isYidaLayout = headerWords.Any(h => h.Text == "行号");
         var headerXs = headerWords.Select(h => h.X).ToList();
 
-        // 2. 数据行聚类
+        // 2. 数据行聚类（表头以下按 y 分组为若干行）
         var dataWords = words
             .Where(w => w.Y < headerY - 6)
             .OrderBy(w => w.Y)
@@ -121,6 +131,7 @@ public partial class PdfParser : IPdfParser
             return false;
         }
 
+        // 有数量的一般就是有效物料行
         if (item.Quantity > 0)
         {
             return true;
@@ -129,6 +140,7 @@ public partial class PdfParser : IPdfParser
         return code.Contains('*') || code.StartsWith("H", StringComparison.OrdinalIgnoreCase) || code.StartsWith("P", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>将按 y 排序的词聚类为若干行：相邻词 y 差距超过阈值则视为换行。</summary>
     private static List<List<WordItem>> ClusterRows(List<WordItem> words)
     {
         var rows = new List<List<WordItem>>();
@@ -169,6 +181,7 @@ public partial class PdfParser : IPdfParser
 
         foreach (var word in row)
         {
+            // 每个词归入 x 坐标最近的表头列
             var nearest = headerList
                 .OrderBy(item => Math.Abs(word.X - item.h.X))
                 .FirstOrDefault();
@@ -177,6 +190,7 @@ public partial class PdfParser : IPdfParser
                 continue;
             }
 
+            // 键为「表头文本#列序号」，同列多词按出现顺序拼接
             var key = nearest.h.Text + "#" + nearest.idx;
             cell[key] = cell.TryGetValue(key, out var existing) ? existing + word.Text : word.Text;
         }
@@ -184,6 +198,7 @@ public partial class PdfParser : IPdfParser
         return cell;
     }
 
+    /// <summary>根据单元格字典与布局类型构建解析行。</summary>
     private static PdfParseRow BuildRow(Dictionary<string, string> cells, bool isYidaLayout, int lineNo)
     {
         var item = new PdfParseRow { LineNo = lineNo };
@@ -270,6 +285,7 @@ public partial class PdfParser : IPdfParser
         return item;
     }
 
+    /// <summary>按表头文本查找单元格值（键格式 headerText#idx）。</summary>
     private static string? GetHeaderCell(Dictionary<string, string> cells, string headerText)
     {
         // 匹配表头词为 headerText 的单元格（键 = headerText#idx）
@@ -277,6 +293,7 @@ public partial class PdfParser : IPdfParser
         return key is null ? null : cells[key];
     }
 
+    /// <summary>解析单价/金额，兼容两者粘连在同一个单元格文本中的情况。</summary>
     private static void TryParsePriceAmount(string priceCell, string amountCell, out decimal price, out decimal amount)
     {
         price = ParseDecimal(priceCell);
@@ -311,6 +328,7 @@ public partial class PdfParser : IPdfParser
         }
     }
 
+    /// <summary>解析小数（去除千分位逗号）。</summary>
     private static decimal ParseDecimal(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -327,6 +345,7 @@ public partial class PdfParser : IPdfParser
         return 0;
     }
 
+    /// <summary>解析日期（支持 yyyy-MM-dd 格式）。</summary>
     private static DateTime? ParseDate(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -342,12 +361,14 @@ public partial class PdfParser : IPdfParser
         return null;
     }
 
+    /// <summary>从文本中提取订单号。</summary>
     private static string ExtractOrderNo(string text)
     {
         var match = OrderNoRegex.Match(text);
         return match.Success ? match.Value : string.Empty;
     }
 
+    /// <summary>从文本中提取订单日期（支持中文日期与英文日期两种格式）。</summary>
     private static DateTime? ExtractOrderDate(string text)
     {
         var m1 = DateCnRegex.Match(text);
@@ -368,6 +389,7 @@ public partial class PdfParser : IPdfParser
         return null;
     }
 
+    /// <summary>从文本中识别采购方（客户）名称。</summary>
     private static string ExtractBuyerName(string text)
     {
         if (text.Contains("华尔达"))
@@ -398,26 +420,34 @@ public partial class PdfParser : IPdfParser
         return string.Empty;
     }
 
+    /// <summary>归一化词文本（去除首尾空白）。</summary>
     private static string Normalize(string text) => text.Trim();
 
+    /// <summary>订单号模式：PO- 开头或 CGDD 开头的编码。</summary>
     [GeneratedRegex(@"(PO-?\d[\d\-]*|CGDD\d+)")]
     private static partial Regex OrderNoPattern();
 
+    /// <summary>中文日期模式，如 2026年8月15日。</summary>
     [GeneratedRegex(@"(\d{4})年(\d{1,2})月(\d{1,2})日")]
     private static partial Regex DateCnPattern();
 
+    /// <summary>英文日期模式，如 2026-08-15。</summary>
     [GeneratedRegex(@"\d{4}-\d{2}-\d{2}")]
     private static partial Regex DateEnPattern();
 
+    /// <summary>物料编码模式：H/P 开头 + 至少 5 位数字。</summary>
     [GeneratedRegex(@"[HP]\d{5,}")]
     private static partial Regex CodePattern();
 
+    /// <summary>老编码模式：DS 开头。</summary>
     [GeneratedRegex(@"DS[\w\-]+")]
     private static partial Regex OldCodePattern();
 
+    /// <summary>粘连的单价+金额模式，如 11.80 130980.00。</summary>
     [GeneratedRegex(@"(?<p>\d+\.\d{1,2})(?<a>\d+\.\d{2})")]
     private static partial Regex PriceAmountPattern();
 
+    /// <summary>PDF 页面文字词（含坐标）。</summary>
     private sealed class WordItem
     {
         public string Text { get; set; } = string.Empty;

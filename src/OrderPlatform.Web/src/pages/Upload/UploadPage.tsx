@@ -1,3 +1,5 @@
+// 上传页面：支持拖拽上传 PDF 订单 / Excel 客户资料（每次只能一种类型）。
+// 上传后轮询批次解析进度，并可查看 Excel 解析数据、PDF 生成的订单及客户图号统计。
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   App,
@@ -26,7 +28,9 @@ import type {
 
 const { Dragger } = Upload;
 
+// 批次解析状态轮询间隔（毫秒）
 const POLL_INTERVAL = 1500;
+// 上传记录分页大小
 const PAGE_SIZE = 10;
 
 export default function UploadPage() {
@@ -44,6 +48,7 @@ export default function UploadPage() {
   const [excelLoading, setExcelLoading] = useState(false);
   const pollTimerRef = useRef<number | null>(null);
 
+  // 刷新客户图号统计（失败静默）
   const refreshCustomers = useCallback(async () => {
     try {
       setCustomers(await uploadApi.customers());
@@ -63,6 +68,7 @@ export default function UploadPage() {
     }
   }, []);
 
+  // 停止批次轮询定时器
   const stopPolling = () => {
     if (pollTimerRef.current !== null) {
       window.clearInterval(pollTimerRef.current);
@@ -82,9 +88,11 @@ export default function UploadPage() {
     }
   };
 
+  // 判断批次列表是否全部完成或失败（用于停止轮询）
   const allFinished = (list: UploadBatchDto[]) =>
     list.every((b) => b.status === 'Completed' || b.status === 'Failed');
 
+  // 按批次号逐个查询最新状态
   const refreshBatches = useCallback(async (ids: string[]) => {
     const updated: UploadBatchDto[] = [];
     for (const id of ids) {
@@ -98,6 +106,7 @@ export default function UploadPage() {
     return updated;
   }, []);
 
+  // 上传文件：若后台解析未完成则开启定时轮询，直到全部完成
   const handleUpload = async (fileList: UploadFile[]) => {
     const files = fileList
       .map((item) => item.originFileObj)
@@ -147,6 +156,7 @@ export default function UploadPage() {
     }
   };
 
+  // 查看 Excel 批次解析数据（模态框）
   const showExcelDetail = async (batchId: string) => {
     setExcelLoading(true);
     try {

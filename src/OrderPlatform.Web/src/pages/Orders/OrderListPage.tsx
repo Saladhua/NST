@@ -1,3 +1,5 @@
+// 订单列表页：支持关键词、客户、关联状态、推送状态筛选；
+// 可查看详情、推送订单，管理员可删除未推送订单。
 import { useCallback, useEffect, useState } from 'react';
 import { App, Button, Card, Input, Select, Space, Table, Tag, Tooltip } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
@@ -8,12 +10,14 @@ import { uploadApi } from '../../api/upload';
 import { useAuthStore } from '../../store/authStore';
 import type { CustomerImportDto, MatchStatus, OrderListDto, PushStatus } from '../../types';
 
+// 关联状态筛选项
 const parseStatusOptions = [
   { value: 'Matched', label: '已关联' },
   { value: 'Partial', label: '部分关联' },
   { value: 'Unmatched', label: '未关联' },
 ];
 
+// 推送状态筛选项
 const pushStatusOptions = [
   { value: 'NotPushed', label: '未推送' },
   { value: 'Pushed', label: '已推送' },
@@ -56,6 +60,7 @@ export default function OrderListPage() {
   const [parseStatus, setParseStatus] = useState<MatchStatus | undefined>();
   const [customers, setCustomers] = useState<CustomerImportDto[]>([]);
 
+  // 加载客户下拉列表
   const loadCustomers = useCallback(async () => {
     try {
       setCustomers(await uploadApi.customers());
@@ -64,6 +69,7 @@ export default function OrderListPage() {
     }
   }, []);
 
+  // 按当前筛选条件加载订单列表
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -89,6 +95,7 @@ export default function OrderListPage() {
     void loadCustomers();
   }, [load, loadCustomers]);
 
+  // 推送订单到客户系统
   const pushOrder = async (id: string) => {
     try {
       await orderApi.push(id);
@@ -109,6 +116,7 @@ export default function OrderListPage() {
     }
   };
 
+  // 删除订单前二次确认
   const handleDeleteOrder = (record: OrderListDto) => {
     modal.confirm({
       title: '删除订单',

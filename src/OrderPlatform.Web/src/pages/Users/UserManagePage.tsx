@@ -1,3 +1,4 @@
+// 用户管理页（管理员）：分页列表 + 新增/编辑/重置密码/删除用户。
 import { useCallback, useEffect, useState } from 'react';
 import {
   App,
@@ -16,20 +17,24 @@ import { PlusOutlined } from '@ant-design/icons';
 import { userApi } from '../../api/user';
 import type { CreateUserPayload, UserListDto, UserRole, UserStatus } from '../../types';
 
+// 角色下拉选项
 const roleOptions = [
   { value: 'Admin', label: '管理员' },
   { value: 'Operator', label: '操作员' },
 ];
 
+// 状态下拉选项
 const statusOptions = [
   { value: 'Active', label: '启用' },
   { value: 'Disabled', label: '停用' },
 ];
 
+// 角色标签渲染（管理员红色 / 操作员蓝色）
 function roleTag(role: UserRole) {
   return <Tag color={role === 'Admin' ? 'red' : 'blue'}>{role === 'Admin' ? '管理员' : '操作员'}</Tag>;
 }
 
+// 状态标签渲染（启用绿色 / 停用灰色）
 function statusTag(status: UserStatus) {
   return <Tag color={status === 'Active' ? 'success' : 'default'}>{status === 'Active' ? '启用' : '停用'}</Tag>;
 }
@@ -67,6 +72,7 @@ export default function UserManagePage() {
   const [editForm] = Form.useForm<EditUserFormValues>();
   const [resetForm] = Form.useForm<{ newPassword: string }>();
 
+  // 加载用户分页列表
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -84,6 +90,7 @@ export default function UserManagePage() {
     void load();
   }, [load]);
 
+  // 新增用户
   const handleCreate = async () => {
     try {
       const values = await createForm.validateFields();
@@ -100,6 +107,7 @@ export default function UserManagePage() {
     }
   };
 
+  // 打开编辑弹窗并回填当前行数据
   const handleEdit = (record: UserListDto) => {
     setEditing(record);
     editForm.setFieldsValue({
@@ -112,6 +120,7 @@ export default function UserManagePage() {
     setEditOpen(true);
   };
 
+  // 保存编辑后的用户信息
   const handleEditSave = async () => {
     if (!editing) {
       return;
@@ -130,6 +139,7 @@ export default function UserManagePage() {
     }
   };
 
+  // 重置指定用户密码
   const handleResetPassword = async () => {
     if (!editing) {
       return;
@@ -148,6 +158,7 @@ export default function UserManagePage() {
     }
   };
 
+  // 删除用户（admin 账号受保护，前端不显示删除按钮）
   const handleDelete = async (record: UserListDto) => {
     try {
       await userApi.remove(record.id);

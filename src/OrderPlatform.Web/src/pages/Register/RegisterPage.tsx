@@ -1,3 +1,4 @@
+// 注册页：提交注册信息，成功后提示并跳转登录页。
 import { App, Button, Card, Form, Input, Typography } from 'antd';
 import { LockOutlined, MailOutlined, MobileOutlined, SmileOutlined, UserOutlined } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router';
@@ -16,6 +17,7 @@ export default function RegisterPage() {
   const navigate = useNavigate();
   const { message } = App.useApp();
 
+  // 注册提交：成功后跳转登录页
   const onFinish = async (values: RegisterFormValues) => {
     try {
       await authApi.register({

@@ -1,3 +1,4 @@
+// 系统设置页（管理员）：展示配置项列表，逐行编辑后点击「保存」立即生效。
 import { useCallback, useEffect, useState } from 'react';
 import { App, Button, Card, Form, Input, Spin, Table, Typography } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
@@ -11,6 +12,7 @@ export default function SettingsPage() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
 
+  // 加载全部配置项并初始化编辑表单值
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -32,6 +34,7 @@ export default function SettingsPage() {
     void load();
   }, [load]);
 
+  // 保存单个配置项
   const save = async (item: ConfigItemDto) => {
     setSavingKey(item.id);
     try {

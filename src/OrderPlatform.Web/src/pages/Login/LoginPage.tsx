@@ -1,3 +1,4 @@
+// 登录页：表单提交后调用登录接口，成功则写入认证状态并跳转首页。
 import { useEffect } from 'react';
 import { App, Button, Card, Form, Input, Typography } from 'antd';
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
@@ -16,12 +17,14 @@ export default function LoginPage() {
   const isLoggedIn = useAuthStore((state) => state.isLoggedIn());
   const setAuth = useAuthStore((state) => state.setAuth);
 
+  // 已登录用户直接跳转首页
   useEffect(() => {
     if (isLoggedIn) {
       navigate('/', { replace: true });
     }
   }, [isLoggedIn, navigate]);
 
+  // 登录提交：成功则写入认证状态并跳转首页
   const onFinish = async (values: LoginFormValues) => {
     try {
       const result = await authApi.login(values);

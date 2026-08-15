@@ -4,6 +4,7 @@ using OrderPlatform.Domain.Enums;
 
 namespace OrderPlatform.Infrastructure.Persistence;
 
+/// <summary>EF Core 数据库上下文，集中配置实体到表的映射。</summary>
 public class OrderDbContext : DbContext
 {
     public OrderDbContext(DbContextOptions<OrderDbContext> options)
@@ -11,26 +12,36 @@ public class OrderDbContext : DbContext
     {
     }
 
+    /// <summary>系统用户表。</summary>
     public DbSet<User> Users => Set<User>();
 
+    /// <summary>客户表。</summary>
     public DbSet<Customer> Customers => Set<Customer>();
 
+    /// <summary>客户图号资料表。</summary>
     public DbSet<CustomerPart> CustomerParts => Set<CustomerPart>();
 
+    /// <summary>上传批次表。</summary>
     public DbSet<UploadBatch> UploadBatches => Set<UploadBatch>();
 
+    /// <summary>上传文件记录表。</summary>
     public DbSet<UploadFile> UploadFiles => Set<UploadFile>();
 
+    /// <summary>订单主表。</summary>
     public DbSet<OrderMain> Orders => Set<OrderMain>();
 
+    /// <summary>订单明细表。</summary>
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
 
+    /// <summary>订单推送日志表。</summary>
     public DbSet<OrderPushLog> OrderPushLogs => Set<OrderPushLog>();
 
+    /// <summary>系统配置表。</summary>
     public DbSet<SysConfig> SysConfigs => Set<SysConfig>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // 用户：用户名唯一
         var user = modelBuilder.Entity<User>();
         user.ToTable("sys_user");
         user.HasKey(x => x.Id);
@@ -43,6 +54,7 @@ public class OrderDbContext : DbContext
         user.Property(x => x.Role).HasConversion<string>().HasMaxLength(20);
         user.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
 
+        // 客户：名称唯一
         var customer = modelBuilder.Entity<Customer>();
         customer.ToTable("customer");
         customer.HasKey(x => x.Id);
@@ -51,6 +63,7 @@ public class OrderDbContext : DbContext
         customer.Property(x => x.Code).HasMaxLength(50);
         customer.Property(x => x.Remark).HasMaxLength(200);
 
+        // 客户图号资料：按客户查询
         var part = modelBuilder.Entity<CustomerPart>();
         part.ToTable("customer_part");
         part.HasKey(x => x.Id);
@@ -63,6 +76,7 @@ public class OrderDbContext : DbContext
         part.Property(x => x.Raw);
         part.HasIndex(x => x.CustomerId);
 
+        // 上传批次：批次号唯一
         var batch = modelBuilder.Entity<UploadBatch>();
         batch.ToTable("upload_batch");
         batch.HasKey(x => x.Id);
@@ -76,6 +90,7 @@ public class OrderDbContext : DbContext
         batch.Property(x => x.OriginalPath).IsRequired().HasMaxLength(500);
         batch.HasIndex(x => x.CustomerId);
 
+        // 上传文件记录
         var file = modelBuilder.Entity<UploadFile>();
         file.ToTable("upload_file");
         file.HasKey(x => x.Id);
@@ -85,6 +100,7 @@ public class OrderDbContext : DbContext
         file.Property(x => x.Status).IsRequired().HasMaxLength(20);
         file.HasIndex(x => x.BatchId);
 
+        // 订单：订单号唯一，按客户/来源批次索引
         var order = modelBuilder.Entity<OrderMain>();
         order.ToTable("order_main");
         order.HasKey(x => x.Id);
@@ -98,6 +114,7 @@ public class OrderDbContext : DbContext
         order.HasIndex(x => x.CustomerId);
         order.HasIndex(x => x.SourceFileId);
 
+        // 订单明细：按订单索引
         var item = modelBuilder.Entity<OrderItem>();
         item.ToTable("order_item");
         item.HasKey(x => x.Id);
@@ -116,6 +133,7 @@ public class OrderDbContext : DbContext
         item.Property(x => x.MatchStatus).HasConversion<string>().HasMaxLength(20);
         item.HasIndex(x => x.OrderId);
 
+        // 推送日志：按订单索引
         var log = modelBuilder.Entity<OrderPushLog>();
         log.ToTable("order_push_log");
         log.HasKey(x => x.Id);
@@ -126,6 +144,7 @@ public class OrderDbContext : DbContext
         log.Property(x => x.ErrorMessage).HasMaxLength(1000);
         log.HasIndex(x => x.OrderId);
 
+        // 系统配置：键唯一
         var config = modelBuilder.Entity<SysConfig>();
         config.ToTable("sys_config");
         config.HasKey(x => x.Id);

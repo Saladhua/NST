@@ -1,3 +1,4 @@
+/* 全局样式：引入 Tailwind 基础样式，并设置页面背景色。 */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

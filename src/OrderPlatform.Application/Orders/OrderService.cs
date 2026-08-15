@@ -7,17 +7,23 @@ using OrderPlatform.Shared.Api;
 
 namespace OrderPlatform.Application.Orders;
 
+/// <summary>订单服务接口：订单列表、详情、推送、删除。</summary>
 public interface IOrderService
 {
+    /// <summary>分页查询订单列表（支持关键词/客户/推送状态/关联状态筛选）。</summary>
     Task<PagedResult<OrderListDto>> ListAsync(int page, int pageSize, string? keyword, Guid? customerId, PushStatus? pushStatus, MatchStatus? parseStatus, CancellationToken cancellationToken);
 
+    /// <summary>查询订单详情（含明细，按行号排序）。</summary>
     Task<OrderDetailDto> GetDetailAsync(Guid id, CancellationToken cancellationToken);
 
+    /// <summary>推送订单（技术验证版为模拟推送，记录推送日志）。</summary>
     Task<PushResultDto> PushAsync(Guid orderId, CancellationToken cancellationToken);
 
+    /// <summary>删除订单（已推送的订单不可删除）。</summary>
     Task DeleteAsync(Guid id, CancellationToken cancellationToken);
 }
 
+/// <summary>订单服务实现。</summary>
 public class OrderService : IOrderService
 {
     private readonly IOrderRepository _orderRepository;
@@ -37,6 +43,7 @@ public class OrderService : IOrderService
         _mapper = mapper;
     }
 
+    /// <summary>分页查询订单并补充客户名称。</summary>
     public async Task<PagedResult<OrderListDto>> ListAsync(
         int page,
         int pageSize,
@@ -69,6 +76,7 @@ public class OrderService : IOrderService
         return new PagedResult<OrderListDto>(list, total);
     }
 
+    /// <summary>查询订单详情，包含明细行与客户名称。</summary>
     public async Task<OrderDetailDto> GetDetailAsync(Guid id, CancellationToken cancellationToken)
     {
         var order = await _orderRepository.GetByIdAsync(id, cancellationToken)
@@ -113,6 +121,7 @@ public class OrderService : IOrderService
         return dto;
     }
 
+    /// <summary>推送订单：技术验证版直接标记为成功并写入推送日志。</summary>
     public async Task<PushResultDto> PushAsync(Guid orderId, CancellationToken cancellationToken)
     {
         var order = await _orderRepository.GetByIdAsync(orderId, cancellationToken)
@@ -145,6 +154,7 @@ public class OrderService : IOrderService
         };
     }
 
+    /// <summary>删除订单：已推送的订单禁止删除。</summary>
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken)
     {
         var order = await _orderRepository.GetByIdAsync(id, cancellationToken)

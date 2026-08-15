@@ -9,6 +9,7 @@ using OrderPlatform.Shared.Api;
 
 namespace OrderPlatform.Application.Auth;
 
+/// <summary>认证服务实现：登录、刷新令牌、注册、修改密码。</summary>
 public class AuthService : IAuthService
 {
     private readonly IUserRepository _userRepository;
@@ -37,6 +38,7 @@ public class AuthService : IAuthService
         _changePasswordValidator = changePasswordValidator;
     }
 
+    /// <summary>登录：校验参数、用户名、密码与账号状态，成功后签发令牌。</summary>
     public async Task<AuthResult> LoginAsync(LoginRequest request, CancellationToken cancellationToken)
     {
         await _loginValidator.ValidateAndThrowAsync(request, cancellationToken);
@@ -60,6 +62,7 @@ public class AuthService : IAuthService
         return BuildAuthResult(user);
     }
 
+    /// <summary>刷新令牌：校验刷新令牌有效性、用户存在与账号状态，再签发新令牌。</summary>
     public async Task<AuthResult> RefreshAsync(RefreshRequest request, CancellationToken cancellationToken)
     {
         var principal = _tokenService.ValidateRefreshToken(request.RefreshToken)
@@ -82,6 +85,7 @@ public class AuthService : IAuthService
         return BuildAuthResult(user);
     }
 
+    /// <summary>注册：校验参数与用户名唯一性，创建普通用户。</summary>
     public async Task RegisterAsync(RegisterRequest request, CancellationToken cancellationToken)
     {
         await _registerValidator.ValidateAndThrowAsync(request, cancellationToken);
@@ -109,6 +113,7 @@ public class AuthService : IAuthService
         await _userRepository.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>修改密码：校验原密码正确后更新为新密码。</summary>
     public async Task ChangePasswordAsync(Guid userId, ChangePasswordRequest request, CancellationToken cancellationToken)
     {
         await _changePasswordValidator.ValidateAndThrowAsync(request, cancellationToken);
@@ -127,6 +132,7 @@ public class AuthService : IAuthService
         await _userRepository.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>组装登录/刷新成功后的返回结果（访问令牌 + 刷新令牌 + 用户信息）。</summary>
     private AuthResult BuildAuthResult(User user)
     {
         return new AuthResult

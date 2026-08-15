@@ -11,12 +11,15 @@ using OrderPlatform.Application.Users;
 
 namespace OrderPlatform.Application;
 
+/// <summary>应用层依赖注入注册：服务、解析器、校验器、AutoMapper、任务队列。</summary>
 public static class DependencyInjection
 {
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
+        // 自动注册程序集内全部 AutoMapper Profile 与 FluentValidation 校验器
         services.AddAutoMapper(Assembly.GetExecutingAssembly());
         services.AddValidatorsFromAssembly(Assembly.GetExecutingAssembly());
+
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IPdfParser, PdfParser>();
         services.AddScoped<IExcelParser, ExcelParser>();

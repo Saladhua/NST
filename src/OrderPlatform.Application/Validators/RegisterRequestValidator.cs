@@ -3,6 +3,7 @@ using OrderPlatform.Application.Auth.Dtos;
 
 namespace OrderPlatform.Application.Validators;
 
+/// <summary>注册请求校验器。</summary>
 public class RegisterRequestValidator : AbstractValidator<RegisterRequest>
 {
     public RegisterRequestValidator()
