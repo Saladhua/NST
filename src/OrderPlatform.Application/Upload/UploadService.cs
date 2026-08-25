@@ -146,10 +146,18 @@ public class UploadService : IUploadService
             else
             {
                 // Excel 自动识别：订单文件（含采购单号/订单编号）或客户资料
+                _logger.LogInformation("Excel {File} 开始读取工作簿", batch.FileName);
+                batch.Progress = 40;
+                await _batchRepository.SaveChangesAsync(cancellationToken);
                 var grids = ExcelReader.Read(savedPath);
                 if (_excelOrderParser.IsOrderWorkbook(grids))
                 {
-                    await CreateOrderFromParseAsync(batch, _excelOrderParser.Parse(grids), cancellationToken);
+                    // Excel 订单：解析 + 生成订单
+                    batch.Progress = 60;
+                    await _batchRepository.SaveChangesAsync(cancellationToken);
+                    var excelPdf = _excelOrderParser.Parse(grids);
+                    _logger.LogInformation("Excel {File} 订单解析成功，明细 {RowCount} 行", batch.FileName, excelPdf.Rows.Count);
+                    await CreateOrderFromParseAsync(batch, excelPdf, cancellationToken);
                 }
                 else
                 {
@@ -369,6 +377,12 @@ public class UploadService : IUploadService
     {
         var pdf = await _pdfParser.ParseAsync(savedPath, cancellationToken);
 
+        // 文字层解析命中：记录行数并推进进度
+        if (pdf.Rows.Count > 0)
+        {
+            _logger.LogInformation("PDF {File} 文字层解析成功，明细 {RowCount} 行", batch.FileName, pdf.Rows.Count);
+        }
+
         // 无文字层（文字被曲线化，如创达）→ 渲染 + OCR 解析
         if (pdf.Rows.Count == 0 && _ocrOrderParser.NeedsOcr(savedPath))
         {
@@ -376,39 +390,132 @@ public class UploadService : IUploadService
             batch.Progress = 60;
             await _batchRepository.SaveChangesAsync(cancellationToken);
             pdf = _ocrOrderParser.Parse(savedPath, cancellationToken);
+            _logger.LogInformation("PDF {File} OCR 完成，明细 {RowCount} 行", batch.FileName, pdf.Rows.Count);
         }
 
         await CreateOrderFromParseAsync(batch, pdf, cancellationToken);
     }
 
     /// <summary>
-    /// 由解析结果（PDF / OCR / Excel 订单统一结构）生成订单：订单号去重、客户识别、按客户策略匹配图号。
+    /// 由解析结果（PDF / OCR / Excel 订单统一结构）生成订单：客户识别、按客户策略匹配图号。
+    /// 创达按行备注中的子订单号拆分为多个订单，其余客户维持单个订单。
     /// </summary>
     private async Task CreateOrderFromParseAsync(UploadBatch batch, PdfParseResult pdf, CancellationToken cancellationToken)
     {
-        var orderNo = string.IsNullOrEmpty(pdf.OrderNo)
-            ? $"ORDER-{DateTime.Now:yyyyMMddHHmmss}"
-            : pdf.OrderNo;
-
         // 客户识别：解析出的客户名精确匹配，否则尝试包含匹配
         var customer = await FindCustomerAsync(pdf.BuyerName, batch.FileName, cancellationToken);
 
-        // 创达：订单号在行备注中（如 202608031B），优先于表头编号
+        var strategyName = customer?.Name ?? pdf.BuyerName;
+        var parts = customer is null
+            ? new List<CustomerPart>()
+            : await _partRepository.ListByCustomerAsync(customer.Id, cancellationToken);
+
+        // 创达：订单号在行备注中，按子订单号拆分为多个订单
         if (IsChuangda(customer?.Name) || IsChuangda(pdf.BuyerName))
         {
-            var remarkOrderNo = PdfParser.ExtractOrderNoFromRemarks(pdf.Rows);
-            if (remarkOrderNo.Length > 0)
-            {
-                orderNo = remarkOrderNo;
-            }
+            await CreateChuangdaOrdersAsync(batch, pdf, customer, strategyName, parts, cancellationToken);
+        }
+        else
+        {
+            var orderNo = string.IsNullOrEmpty(pdf.OrderNo)
+                ? $"ORDER-{DateTime.Now:yyyyMMddHHmmss}"
+                : pdf.OrderNo;
+            await CreateSingleOrderAsync(batch, pdf, customer, orderNo, pdf.Rows, strategyName, parts, cancellationToken);
         }
 
+        batch.CustomerId = customer?.Id;
+        batch.RawDataJson = JsonSerializer.Serialize(pdf);
+    }
+
+    /// <summary>创达订单：按行备注中的子订单号拆分为多个订单；空备注行并入上方最近有编号的行所在组。</summary>
+    private async Task CreateChuangdaOrdersAsync(
+        UploadBatch batch,
+        PdfParseResult pdf,
+        Customer? customer,
+        string strategyName,
+        List<CustomerPart> parts,
+        CancellationToken cancellationToken)
+    {
+        var groups = GroupChuangdaRows(pdf.Rows);
+        var fallbackOrderNo = string.IsNullOrEmpty(pdf.OrderNo)
+            ? $"ORDER-{DateTime.Now:yyyyMMddHHmmss}"
+            : pdf.OrderNo;
+
+        if (groups.Count == 0)
+        {
+            // 未提取到任何子订单号：回退单订单（保持原行为）
+            await CreateSingleOrderAsync(batch, pdf, customer, fallbackOrderNo, pdf.Rows, strategyName, parts, cancellationToken);
+            return;
+        }
+
+        foreach (var (orderNo, rows) in groups)
+        {
+            var no = string.IsNullOrWhiteSpace(orderNo) ? fallbackOrderNo : orderNo;
+            await CreateSingleOrderAsync(batch, pdf, customer, no, rows, strategyName, parts, cancellationToken);
+        }
+    }
+
+    /// <summary>把创达明细行按行备注中的子订单号分组，空备注行并入上方最近有编号的行所在组。</summary>
+    private static List<(string OrderNo, List<PdfParseRow> Rows)> GroupChuangdaRows(IEnumerable<PdfParseRow> rows)
+    {
+        var groups = new List<(string OrderNo, List<PdfParseRow> Rows)>();
+        var pendingNo = string.Empty;
+        List<PdfParseRow>? pending = null;
+
+        foreach (var row in rows)
+        {
+            var no = PdfParser.ExtractOrderNoFromRemark(row.Remark);
+            if (no.Length > 0 && no != pendingNo)
+            {
+                // 子订单号变化：收尾上一组，开启新组；相同编号的连续行并入当前组
+                if (pending is not null && pending.Count > 0)
+                {
+                    groups.Add((pendingNo, pending));
+                }
+
+                pendingNo = no;
+                pending = new List<PdfParseRow>();
+            }
+
+            if (pending is null)
+            {
+                pending = new List<PdfParseRow>();
+            }
+
+            if (pendingNo.Length == 0)
+            {
+                // 首行即无编号（异常场景）：单独记为一组兜底，编号为空时回退表头订单号
+                groups.Add((string.Empty, new List<PdfParseRow> { row }));
+                continue;
+            }
+
+            pending.Add(row);
+        }
+
+        if (pending is not null && pending.Count > 0)
+        {
+            groups.Add((pendingNo, pending));
+        }
+
+        return groups;
+    }
+
+    /// <summary>由解析行构建单个订单：订单号去重、逐行匹配生成明细、汇总保存。</summary>
+    private async Task CreateSingleOrderAsync(
+        UploadBatch batch,
+        PdfParseResult pdf,
+        Customer? customer,
+        string orderNo,
+        List<PdfParseRow> rows,
+        string strategyName,
+        List<CustomerPart> parts,
+        CancellationToken cancellationToken)
+    {
         // 订单号去重：已存在则跳过创建
         var existingOrder = await _orderRepository.GetByOrderNoAsync(orderNo, cancellationToken);
         if (existingOrder is not null)
         {
             batch.ErrorMessage = $"订单「{orderNo}」已存在，已跳过重复导入";
-            batch.RawDataJson = JsonSerializer.Serialize(pdf);
             return;
         }
 
@@ -425,14 +532,9 @@ public class UploadService : IUploadService
             CreatedAt = DateTime.Now
         };
 
-        var parts = customer is null
-            ? new List<CustomerPart>()
-            : await _partRepository.ListByCustomerAsync(customer.Id, cancellationToken);
-        var strategyName = customer?.Name ?? pdf.BuyerName;
-
         // 逐行解析明细并匹配客户图号
         var allMatched = true;
-        foreach (var row in pdf.Rows)
+        foreach (var row in rows)
         {
             var match = MatchService.Match(strategyName, row, parts);
             if (match.Status != MatchStatus.Matched)
@@ -498,15 +600,18 @@ public class UploadService : IUploadService
             order.TotalAmount = order.Items.Sum(i => i.Amount);
             await _orderRepository.AddAsync(order, cancellationToken);
             await _orderRepository.SaveChangesAsync(cancellationToken);
+
+            // 拆分多订单时，本次存在新创建订单则清掉先前任务「已存在，已跳过」的提示
+            if (batch.ErrorMessage?.Contains("已存在") == true)
+            {
+                batch.ErrorMessage = null;
+            }
         }
         else
         {
             // 未解析出任何明细行：明确记录「未生成订单」，避免列表页误标为「订单已删除」
             batch.ErrorMessage = "未解析出有效订单明细，未生成订单";
         }
-
-        batch.CustomerId = customer?.Id;
-        batch.RawDataJson = JsonSerializer.Serialize(pdf);
     }
 
     /// <summary>是否创达客户。</summary>
@@ -553,10 +658,12 @@ public class UploadService : IUploadService
         var batches = await _batchRepository.ListAsync(page, pageSize, cancellationToken);
         var total = await _batchRepository.CountAsync(cancellationToken);
         var orderCounts = await _orderRepository.CountBySourceFileIdsAsync(batches.Select(b => b.Id), cancellationToken);
+        // 批量预取客户，避免每个批次一次 N+1 查询
+        var customerMap = (await _customerRepository.ListAsync(cancellationToken)).ToDictionary(c => c.Id);
         var items = new List<UploadBatchDto>();
         foreach (var batch in batches)
         {
-            items.Add(await ToDtoAsync(batch, orderCounts.GetValueOrDefault(batch.Id, 0), cancellationToken));
+            items.Add(await ToDtoAsync(batch, orderCounts.GetValueOrDefault(batch.Id, 0), cancellationToken, customerMap));
         }
 
         return new PagedResult<UploadBatchDto>(items, total);
@@ -611,20 +718,16 @@ public class UploadService : IUploadService
         }
 
         var result = new List<OrderGeneratedDto>();
+        // 批量预取客户，避免每个订单一次 N+1 查询
+        var customerNames = (await _customerRepository.ListAsync(cancellationToken)).ToDictionary(c => c.Id);
         foreach (var order in orders)
         {
-            Customer? customer = null;
-            if (order.CustomerId != Guid.Empty)
-            {
-                customer = await _customerRepository.GetByIdAsync(order.CustomerId, cancellationToken);
-            }
-
             result.Add(new OrderGeneratedDto
             {
                 OrderId = order.Id,
                 OrderNo = order.OrderNo,
                 CustomerId = order.CustomerId,
-                CustomerName = customer?.Name,
+                CustomerName = order.CustomerId == Guid.Empty ? null : customerNames.GetValueOrDefault(order.CustomerId)?.Name,
                 ItemCount = order.Items.Count,
                 ParseStatus = order.ParseStatus,
                 Items = order.Items.Select(i => new MatchResultItem
@@ -656,7 +759,11 @@ public class UploadService : IUploadService
     }
 
     /// <summary>批次实体转 DTO，计算订单删除标记（已完成但无订单且非重复导入）。</summary>
-    private async Task<UploadBatchDto> ToDtoAsync(UploadBatch batch, int orderCount, CancellationToken cancellationToken)
+    private async Task<UploadBatchDto> ToDtoAsync(
+        UploadBatch batch,
+        int orderCount,
+        CancellationToken cancellationToken,
+        Dictionary<Guid, Customer>? customerMap = null)
     {
         var dto = new UploadBatchDto
         {
@@ -678,8 +785,15 @@ public class UploadService : IUploadService
 
         if (batch.CustomerId.HasValue)
         {
-            var customer = await _customerRepository.GetByIdAsync(batch.CustomerId.Value, cancellationToken);
-            dto.CustomerName = customer?.Name;
+            if (customerMap is not null)
+            {
+                dto.CustomerName = customerMap.GetValueOrDefault(batch.CustomerId.Value)?.Name;
+            }
+            else
+            {
+                var customer = await _customerRepository.GetByIdAsync(batch.CustomerId.Value, cancellationToken);
+                dto.CustomerName = customer?.Name;
+            }
         }
 
         return dto;

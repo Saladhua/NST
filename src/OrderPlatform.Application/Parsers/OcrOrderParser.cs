@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using PDFtoImage;
 using RapidOcrNet;
@@ -25,21 +26,41 @@ public interface IOcrOrderParser
 /// </summary>
 public partial class OcrOrderParser : IOcrOrderParser
 {
-    /// <summary>渲染 DPI（150：页面 842pt → 约 1754px，明细文字高约 15px）。</summary>
-    private const int RenderDpi = 150;
+    /// <summary>渲染 DPI（200：页面 842pt → 约 2339px，中文小字识别率更高）。可用 Ocr:RenderDpi 配置覆盖。</summary>
+    private readonly int _renderDpi;
 
     private static readonly Regex OrderNoRegex = OcrOrderNoPattern();
     private static readonly Regex DateRegex = OcrDatePattern();
     private static readonly Regex CodePattern = OcrCodePattern();
 
-    private readonly RapidOcr _ocr = new();
+    private readonly Lazy<RapidOcr> _ocr;
     private readonly SemaphoreSlim _ocrLock = new(1, 1);
     private readonly ILogger<OcrOrderParser> _logger;
-    private bool _initialized;
 
-    public OcrOrderParser(ILogger<OcrOrderParser> logger)
+    public OcrOrderParser(ILogger<OcrOrderParser> logger, IConfiguration? configuration = null)
     {
         _logger = logger;
+        _renderDpi = configuration?.GetValue<int>("Ocr:RenderDpi") ?? 200;
+
+        // 模型目录可用 Ocr:ModelDir 配置覆盖，默认取应用目录下的 models/v5
+        var modelDir = configuration?["Ocr:ModelDir"] ?? AppContext.BaseDirectory;
+        _ocr = new Lazy<RapidOcr>(() =>
+        {
+            var detPath = Path.Combine(modelDir, "models", "v5", "ch_PP-OCRv5_mobile_det.onnx");
+            var clsPath = Path.Combine(modelDir, "models", "v5", "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx");
+            var recPath = Path.Combine(modelDir, "models", "v5", "ch_PP-OCRv5_rec_mobile.onnx");
+            var keysPath = Path.Combine(modelDir, "models", "v5", "ppocrv5_dict.txt");
+
+            if (!File.Exists(recPath) || !File.Exists(keysPath))
+            {
+                throw new InvalidOperationException("OCR 中文模型缺失，请确认 models/v5 目录包含 ch_PP-OCRv5_rec_mobile.onnx 与 ppocrv5_dict.txt");
+            }
+
+            var ocr = new RapidOcr();
+            ocr.InitModels(detPath, clsPath, recPath, keysPath);
+            _logger.LogInformation("RapidOcr 模型初始化完成");
+            return ocr;
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     /// <inheritdoc />
@@ -66,7 +87,7 @@ public partial class OcrOrderParser : IOcrOrderParser
     public PdfParseResult Parse(string filePath, CancellationToken cancellationToken = default)
     {
         var result = new PdfParseResult();
-        EnsureInitialized();
+        _ = _ocr.Value;
 
         var pdfBytes = File.ReadAllBytes(filePath);
         var pageCount = 1;
@@ -84,7 +105,7 @@ public partial class OcrOrderParser : IOcrOrderParser
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            using var bitmap = Conversion.ToImage(pdfBytes, page, null, new RenderOptions(RenderDpi));
+            using var bitmap = RenderPage(pdfBytes, page, cancellationToken);
             var ocrResult = RunOcr(bitmap, cancellationToken);
 
             var words = ocrResult.TextBlocks
@@ -120,36 +141,26 @@ public partial class OcrOrderParser : IOcrOrderParser
         return result;
     }
 
-    /// <summary>初始化 OCR 模型（中文识别模型 + 内置检测/分类模型）。</summary>
-    private void EnsureInitialized()
+    /// <summary>渲染 PDF 页为位图：高 DPI 打开失败时自动降级重试（兼容部分曲线化 PDF 在高 DPI 渲染崩溃的情况）。</summary>
+    private SKBitmap RenderPage(byte[] pdfBytes, int page, CancellationToken cancellationToken)
     {
-        if (_initialized)
+        var dpis = new[] { _renderDpi, 150, 100, 72 };
+        Exception? lastException = null;
+        foreach (var dpi in dpis.Distinct())
         {
-            return;
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                return Conversion.ToImage(pdfBytes, page, null, new RenderOptions(dpi));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                lastException = ex;
+                _logger.LogWarning("PDF 第 {Page} 页按 {Dpi} DPI 渲染失败：{Message}，尝试降级", page, dpi, ex.Message);
+            }
         }
 
-        lock (_ocrLock)
-        {
-            if (_initialized)
-            {
-                return;
-            }
-
-            var baseDir = AppContext.BaseDirectory;
-            var detPath = Path.Combine(baseDir, "models", "v5", "ch_PP-OCRv5_mobile_det.onnx");
-            var clsPath = Path.Combine(baseDir, "models", "v5", "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx");
-            var recPath = Path.Combine(baseDir, "models", "v5", "ch_PP-OCRv5_rec_mobile.onnx");
-            var keysPath = Path.Combine(baseDir, "models", "v5", "ppocrv5_dict.txt");
-
-            if (!File.Exists(recPath) || !File.Exists(keysPath))
-            {
-                throw new InvalidOperationException("OCR 中文模型缺失，请确认 models/v5 目录包含 ch_PP-OCRv5_rec_mobile.onnx 与 ppocrv5_dict.txt");
-            }
-
-            _ocr.InitModels(detPath, clsPath, recPath, keysPath);
-            _initialized = true;
-            _logger.LogInformation("RapidOcr 模型初始化完成");
-        }
+        throw lastException ?? new PDFtoImage.Exceptions.PdfUnknownException();
     }
 
     /// <summary>执行 OCR（串行化，避免并发使用同一 ONNX 会话）。</summary>
@@ -159,7 +170,7 @@ public partial class OcrOrderParser : IOcrOrderParser
         try
         {
             var options = RapidOcrOptions.Default with { ImgResize = (int)(bitmap.Width > bitmap.Height ? bitmap.Width : bitmap.Height), DoAngle = false };
-            return _ocr.Detect(bitmap, options);
+            return _ocr.Value.Detect(bitmap, options);
         }
         finally
         {
@@ -167,8 +178,8 @@ public partial class OcrOrderParser : IOcrOrderParser
         }
     }
 
-    /// <summary>按坐标把 OCR 文本块重建为表格行（以物料编码列为行锚点分行，避免折行/行距导致的聚类误差）。</summary>
-    private static void ParseTable(List<OcrWord> words, PdfParseResult result)
+    /// <summary>按坐标把 OCR 文本块重建为表格行。行锚点 = 编码列内的纯数字编码块；行归属按锚点 y 条带切分；列归属按表头词合并后的列区间归位。</summary>
+    private void ParseTable(List<OcrWord> words, PdfParseResult result)
     {
         // 1. 表头锚点：包含「物料编码」的块
         var headerAnchor = words.FirstOrDefault(w => w.Text.StartsWith("物料编码", StringComparison.Ordinal))
@@ -188,15 +199,25 @@ public partial class OcrOrderParser : IOcrOrderParser
             return;
         }
 
-        // 2. 行锚点：编码列（物料编码表头 x 范围）内的数据块，每行一个编码
-        var codeHeader = headerWords.FirstOrDefault(w => w.Text.StartsWith("物料编码", StringComparison.Ordinal))
-            ?? headerWords.First(w => w.Text.Contains("编码"));
-        var codeColCenter = codeHeader.X + codeHeader.Width / 2;
-        var codeColTolerance = Math.Max(codeHeader.Width, 60);
+        var columns = BuildColumns(headerWords);
+        var codeCol = columns.FirstOrDefault(c => c.Name.StartsWith("物料编码", StringComparison.Ordinal));
+        if (codeCol is null)
+        {
+            return;
+        }
 
-        var dataWords = words.Where(w => w.Y > headerAnchor.Y + headerAnchor.Height * 0.8).ToList();
+        // 排除表尾合计行：以「合计」标签词为界，其 y 之后的块（合计/总数量/总金额）不再参与行归属
+        var totalAnchor = words.FirstOrDefault(w => w.Y > headerAnchor.Y && w.Text.Trim() == "合计");
+        var tableBottom = totalAnchor is null ? double.MaxValue : totalAnchor.Y;
+        var dataWords = words
+            .Where(w => w.Y > headerAnchor.Y + headerAnchor.Height * 0.8)
+            .Where(w => w.Y < tableBottom)
+            .ToList();
+
+        // 2. 行锚点：编码列区间内的纯数字编码块（排除备注/合计/文本块被误当行锚点）
         var anchors = dataWords
-            .Where(w => Math.Abs(w.X + w.Width / 2 - codeColCenter) < codeColTolerance)
+            .Where(w => CenterX(w) >= codeCol.Left && CenterX(w) <= codeCol.Right)
+            .Where(w => OcrCodePattern().IsMatch(CleanCode(w.Text)))
             .OrderBy(w => w.Y)
             .ToList();
 
@@ -205,33 +226,28 @@ public partial class OcrOrderParser : IOcrOrderParser
             return;
         }
 
-        // 3. 每个数据块归入 Y 距离最近的锚点行（折行块自然归入本行）
+        // 3. 行归属：相邻锚点 y 的中点切分条带，数据块按 y 落带归行（同一逻辑行的折行/备注碎片不再错配到相邻行）
         var rowBuckets = anchors.ToDictionary(a => a, _ => new List<OcrWord>());
         foreach (var word in dataWords)
         {
-            var nearest = anchors.OrderBy(a => Math.Abs(a.Y - word.Y)).First();
-            rowBuckets[nearest].Add(word);
+            for (var i = 0; i < anchors.Count; i++)
+            {
+                var lower = i == 0 ? double.MinValue : anchors[i - 1].Y + (anchors[i].Y - anchors[i - 1].Y) / 2;
+                var upper = i == anchors.Count - 1 ? double.MaxValue : anchors[i].Y + (anchors[i + 1].Y - anchors[i].Y) / 2;
+                if (word.Y >= lower && word.Y < upper)
+                {
+                    rowBuckets[anchors[i]].Add(word);
+                    break;
+                }
+            }
         }
 
-        // 4. 每行按列归位（x 中心最近的表头列）
+        // 4. 每行按列区间归位（列边界以表头词为准，右缘含表格边框外的尾部碎片）
         var lineNo = result.Rows.Count;
         foreach (var anchor in anchors)
         {
             var row = rowBuckets[anchor];
-            var cells = new Dictionary<string, string>();
-            foreach (var word in row.OrderBy(w => w.X))
-            {
-                var center = word.X + word.Width / 2;
-                var nearest = headerWords
-                    .Select(h => new { h.Text, Center = h.X + h.Width / 2 })
-                    .OrderBy(h => Math.Abs(center - h.Center))
-                    .First();
-
-                cells[nearest.Text] = cells.TryGetValue(nearest.Text, out var existing)
-                    ? existing + word.Text
-                    : word.Text;
-            }
-
+            var cells = AssignCellsByRegion(row, columns);
             var item = BuildRow(cells, lineNo + 1);
             if (IsValidOrderLine(item))
             {
@@ -239,6 +255,81 @@ public partial class OcrOrderParser : IOcrOrderParser
                 lineNo++;
             }
         }
+    }
+
+    /// <summary>文本块 x 中心。</summary>
+    private static double CenterX(OcrWord word) => word.X + word.Width / 2;
+
+    /// <summary>表头词转列区间：把横向紧邻的拆词合并为一列（如「行」「备注」→「行备注」），相邻列以中点划分边界。</summary>
+    private static List<ColumnRegion> BuildColumns(List<OcrWord> headerWords)
+    {
+        // 拆词间隙：OCR 把列标题拆开时横向相距通常为 0~字高，而列与列之间有空档，取字高的 0.25 作为合并阈值
+        var mergeGap = headerWords.Max(w => w.Height) * 0.25;
+        var columns = new List<ColumnRegion>();
+        foreach (var w in headerWords.OrderBy(x => x.X))
+        {
+            var right = w.X + w.Width;
+            var last = columns.Count > 0 ? columns[^1] : null;
+            if (last is not null && w.X <= last.Right + mergeGap)
+            {
+                last.Name += w.Text;
+                last.Left = Math.Min(last.Left, w.X);
+                last.Right = Math.Max(last.Right, right);
+            }
+            else
+            {
+                columns.Add(new ColumnRegion { Name = w.Text, Left = w.X, Right = right });
+            }
+        }
+
+        if (columns.Count == 0)
+        {
+            return columns;
+        }
+
+        // 首列左边界、末列右边界向外扩展，避免边框外数据块丢失；相邻列以中点划分
+        columns[0].Left = double.MinValue;
+        for (var i = 0; i < columns.Count - 1; i++)
+        {
+            var mid = (columns[i].Right + columns[i + 1].Left) / 2;
+            columns[i].Right = mid;
+            columns[i + 1].Left = mid;
+        }
+
+        columns[^1].Right = double.MaxValue;
+        return columns;
+    }
+
+    /// <summary>按列区间归位：数据块中心落在哪个列区间即归该列；区间外则回到最近列中心。</summary>
+    private static Dictionary<string, string> AssignCellsByRegion(List<OcrWord> row, List<ColumnRegion> columns)
+    {
+        var cells = new Dictionary<string, string>();
+        foreach (var word in row.OrderBy(w => w.X))
+        {
+            var center = CenterX(word);
+            var col = columns.FirstOrDefault(c => center >= c.Left && center <= c.Right)
+                ?? columns.OrderBy(c => Math.Abs(center - (c.Left + c.Right) / 2)).FirstOrDefault();
+            if (col is null)
+            {
+                continue;
+            }
+
+            cells[col.Name] = cells.TryGetValue(col.Name, out var existing)
+                ? existing + word.Text
+                : word.Text;
+        }
+
+        return cells;
+    }
+
+    /// <summary>表格列区间（合并后的列名 + 左右 x 边界）。</summary>
+    private sealed class ColumnRegion
+    {
+        public string Name { get; set; } = string.Empty;
+
+        public double Left { get; set; }
+
+        public double Right { get; set; }
     }
 
     /// <summary>根据单元格字典构建明细行（创达列映射；表头按前缀匹配避免「客商物料编码」误命中）。</summary>

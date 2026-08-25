@@ -317,13 +317,18 @@ public partial class PdfParser : IPdfParser
             {
                 var idx1 = priceCell.IndexOf('.');
                 var idx2 = priceCell.LastIndexOf('.');
-                var p = priceCell[..(idx2 - 2)];
-                var a = priceCell[(idx2 - 2)..];
-                if (decimal.TryParse(p, NumberStyles.Any, CultureInfo.InvariantCulture, out var pv)
-                    && decimal.TryParse(a, NumberStyles.Any, CultureInfo.InvariantCulture, out var av))
+                // 字符串切片越界防御：切割点须位于 [0, Length) 且至少保留位整数部分
+                var cut = idx2 - 2;
+                if (cut > 0 && cut < priceCell.Length && idx1 < cut)
                 {
-                    price = pv;
-                    amount = av;
+                    var p = priceCell[..cut];
+                    var a = priceCell[cut..];
+                    if (decimal.TryParse(p, NumberStyles.Any, CultureInfo.InvariantCulture, out var pv)
+                        && decimal.TryParse(a, NumberStyles.Any, CultureInfo.InvariantCulture, out var av))
+                    {
+                        price = pv;
+                        amount = av;
+                    }
                 }
             }
         }
@@ -370,6 +375,21 @@ public partial class PdfParser : IPdfParser
     }
 
     /// <summary>
+    /// 从单个行备注中提取子订单号（创达：订单号在行备注中，如「202608032B、6410根，…」）。
+    /// 未命中返回空串。
+    /// </summary>
+    public static string ExtractOrderNoFromRemark(string? remark)
+    {
+        if (string.IsNullOrWhiteSpace(remark))
+        {
+            return string.Empty;
+        }
+
+        var m = RemarkOrderNoRegex.Match(remark);
+        return m.Success ? m.Value : string.Empty;
+    }
+
+    /// <summary>
     /// 从行备注中提取订单号（创达：订单号在行备注中，如「202608031B、6410根，…」）。
     /// 取首个命中的编号；未命中返回空串。
     /// </summary>
@@ -377,15 +397,10 @@ public partial class PdfParser : IPdfParser
     {
         foreach (var row in rows)
         {
-            if (string.IsNullOrWhiteSpace(row.Remark))
+            var no = ExtractOrderNoFromRemark(row.Remark);
+            if (no.Length > 0)
             {
-                continue;
-            }
-
-            var m = RemarkOrderNoRegex.Match(row.Remark);
-            if (m.Success)
-            {
-                return m.Value;
+                return no;
             }
         }
 

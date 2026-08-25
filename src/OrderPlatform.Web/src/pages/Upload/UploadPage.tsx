@@ -13,6 +13,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   Upload,
 } from 'antd';
@@ -284,7 +285,14 @@ export default function UploadPage() {
       key: 'remark',
       width: 200,
       ellipsis: true,
-      render: (v: string) => v || '-',
+      render: (value: string) =>
+        value ? (
+          <Tooltip title={value}>
+            <span>{value}</span>
+          </Tooltip>
+        ) : (
+          '-'
+        ),
     },
     {
       title: '客户图号',

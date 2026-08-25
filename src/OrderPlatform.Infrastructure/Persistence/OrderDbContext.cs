@@ -136,7 +136,7 @@ public class OrderDbContext : DbContext
         item.Property(x => x.Unit).HasMaxLength(20);
         item.Property(x => x.Price).HasColumnType("decimal(18,4)");
         item.Property(x => x.Amount).HasColumnType("decimal(18,2)");
-        item.Property(x => x.Remark).HasMaxLength(500);
+        item.Property(x => x.Remark);
         item.Property(x => x.MatchStatus).HasConversion<string>().HasMaxLength(20);
         item.Property(x => x.ErpPrdNo).HasMaxLength(100);
         item.Property(x => x.MaterialSyncStatus).HasConversion<string>().HasMaxLength(20);
