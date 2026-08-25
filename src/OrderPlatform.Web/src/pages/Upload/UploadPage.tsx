@@ -47,6 +47,8 @@ export default function UploadPage() {
   const [excelDetail, setExcelDetail] = useState<ExcelBatchDetailDto | null>(null);
   const [excelLoading, setExcelLoading] = useState(false);
   const pollTimerRef = useRef<number | null>(null);
+  // 上传中同步锁：antd 拖入多文件时 onChange 会连续触发多次，state 异步更新读不到最新值，须用 ref 防重入
+  const uploadingRef = useRef(false);
 
   // 刷新客户图号统计（失败静默）
   const refreshCustomers = useCallback(async () => {
@@ -108,6 +110,10 @@ export default function UploadPage() {
 
   // 上传文件：若后台解析未完成则开启定时轮询，直到全部完成
   const handleUpload = async (fileList: UploadFile[]) => {
+    if (uploadingRef.current) {
+      return;
+    }
+    uploadingRef.current = true;
     const files = fileList
       .map((item) => item.originFileObj)
       .filter((f): f is NonNullable<typeof f> => Boolean(f))
@@ -151,6 +157,7 @@ export default function UploadPage() {
     } catch {
       message.error('上传失败，请检查文件格式或是否重复上传');
     } finally {
+      uploadingRef.current = false;
       setUploading(false);
       setFileList([]);
     }
@@ -272,6 +279,14 @@ export default function UploadPage() {
     { title: '规格', dataIndex: 'spec', key: 'spec', render: (v: string) => v || '-' },
     { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 100 },
     {
+      title: '行备注',
+      dataIndex: 'remark',
+      key: 'remark',
+      width: 200,
+      ellipsis: true,
+      render: (v: string) => v || '-',
+    },
+    {
       title: '客户图号',
       dataIndex: 'customerPartNo',
       key: 'customerPartNo',
@@ -319,7 +334,7 @@ export default function UploadPage() {
           fileList={fileList}
           onChange={({ fileList: newList }) => {
             setFileList(newList);
-            if (!uploading && newList.length > 0) {
+            if (!uploadingRef.current && newList.length > 0) {
               void handleUpload(newList);
             }
           }}

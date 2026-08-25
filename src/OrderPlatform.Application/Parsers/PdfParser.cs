@@ -19,6 +19,7 @@ public partial class PdfParser : IPdfParser
     /// <summary>行聚类阈值：同一行内词的 y 坐标允许的最大差距。</summary>
     private const double RowClusterThreshold = 10;
     private static readonly Regex OrderNoRegex = OrderNoPattern();
+    private static readonly Regex RemarkOrderNoRegex = RemarkOrderNoPattern();
     private static readonly Regex DateCnRegex = DateCnPattern();
     private static readonly Regex DateEnRegex = DateEnPattern();
     private static readonly Regex CodeRegex = CodePattern();
@@ -368,6 +369,29 @@ public partial class PdfParser : IPdfParser
         return match.Success ? match.Value : string.Empty;
     }
 
+    /// <summary>
+    /// 从行备注中提取订单号（创达：订单号在行备注中，如「202608031B、6410根，…」）。
+    /// 取首个命中的编号；未命中返回空串。
+    /// </summary>
+    public static string ExtractOrderNoFromRemarks(IEnumerable<PdfParseRow> rows)
+    {
+        foreach (var row in rows)
+        {
+            if (string.IsNullOrWhiteSpace(row.Remark))
+            {
+                continue;
+            }
+
+            var m = RemarkOrderNoRegex.Match(row.Remark);
+            if (m.Success)
+            {
+                return m.Value;
+            }
+        }
+
+        return string.Empty;
+    }
+
     /// <summary>从文本中提取订单日期（支持中文日期与英文日期两种格式）。</summary>
     private static DateTime? ExtractOrderDate(string text)
     {
@@ -423,9 +447,13 @@ public partial class PdfParser : IPdfParser
     /// <summary>归一化词文本（去除首尾空白）。</summary>
     private static string Normalize(string text) => text.Trim();
 
-    /// <summary>订单号模式：PO- 开头或 CGDD 开头的编码。</summary>
-    [GeneratedRegex(@"(PO-?\d[\d\-]*|CGDD\d+)")]
+    /// <summary>订单号模式：PO- 开头、CGDD 或 CD 开头的编码。</summary>
+    [GeneratedRegex(@"(PO-?\d[\d\-]*|CGDD\d+|CD\d{10,})")]
     private static partial Regex OrderNoPattern();
+
+    /// <summary>行备注订单号模式（创达）：9 位以上数字结尾可带字母，如 202608031B。</summary>
+    [GeneratedRegex(@"\d{9,}[A-Za-z]?")]
+    private static partial Regex RemarkOrderNoPattern();
 
     /// <summary>中文日期模式，如 2026年8月15日。</summary>
     [GeneratedRegex(@"(\d{4})年(\d{1,2})月(\d{1,2})日")]

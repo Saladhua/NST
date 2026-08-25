@@ -24,9 +24,9 @@ builder.Host.UseSerilog();
 // 读取 JWT 配置
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
 
-// 注册基础设施层（EF Core、仓储、安全服务）与应用层（业务服务、解析器、任务队列）
+// 注册基础设施层（EF Core、仓储、安全服务）与应用层（业务服务、解析器、任务队列、ERP 推送）
 builder.Services.AddInfrastructure(builder.Configuration);
-builder.Services.AddApplication();
+builder.Services.AddApplication(builder.Configuration);
 
 // 后台服务：消费上传任务队列，异步解析上传批次
 builder.Services.AddHostedService<OrderPlatform.Api.Hosted.UploadProcessingService>();

@@ -42,10 +42,10 @@ public interface IUploadService
 
 /// <summary>
 /// 上传服务实现。核心流程：
-/// 1. 接收文件（PDF 订单 / Excel 客户资料），同名去重；
+/// 1. 接收文件（PDF 订单 / Excel 客户资料 / Excel 订单），同名去重；
 /// 2. 创建上传批次并入内存队列，由后台服务异步解析；
-/// 3. PDF → 解析订单明细并匹配客户图号生成订单；Excel → 重建客户图号资料；
-/// 4. Excel 导入后回头对未关联订单执行补匹配。
+/// 3. PDF → 文字层解析（无文字层时走 OCR）；Excel → 自动识别「订单」或「客户资料」；
+/// 4. 订单解析后按客户策略匹配图号生成订单；资料导入后回头对未关联订单执行补匹配。
 /// </summary>
 public class UploadService : IUploadService
 {
@@ -57,6 +57,8 @@ public class UploadService : IUploadService
     private readonly IOrderRepository _orderRepository;
     private readonly IPdfParser _pdfParser;
     private readonly IExcelParser _excelParser;
+    private readonly IExcelOrderParser _excelOrderParser;
+    private readonly IOcrOrderParser _ocrOrderParser;
     private readonly IUploadJobQueue _jobQueue;
     private readonly ILogger<UploadService> _logger;
 
@@ -68,6 +70,8 @@ public class UploadService : IUploadService
         IOrderRepository orderRepository,
         IPdfParser pdfParser,
         IExcelParser excelParser,
+        IExcelOrderParser excelOrderParser,
+        IOcrOrderParser ocrOrderParser,
         IUploadJobQueue jobQueue,
         ILogger<UploadService> logger)
     {
@@ -78,6 +82,8 @@ public class UploadService : IUploadService
         _orderRepository = orderRepository;
         _pdfParser = pdfParser;
         _excelParser = excelParser;
+        _excelOrderParser = excelOrderParser;
+        _ocrOrderParser = ocrOrderParser;
         _jobQueue = jobQueue;
         _logger = logger;
     }
@@ -98,6 +104,15 @@ public class UploadService : IUploadService
         if (group.Count > 1)
         {
             throw new BusinessException("同一批上传的文件须为同一类型（全部 PDF 或全部 Excel）");
+        }
+
+        // 同一次请求内不允许出现重名文件（防御前端异常重复提交）
+        var duplicateName = fileList
+            .GroupBy(f => f.FileName, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(g => g.Count() > 1);
+        if (duplicateName is not null)
+        {
+            throw new BusinessException($"同一批上传中存在重名文件「{duplicateName.Key}」，同名文件不可重复上传");
         }
 
         var results = new List<UploadBatchDto>();
@@ -130,12 +145,22 @@ public class UploadService : IUploadService
             }
             else
             {
-                await ProcessExcelAsync(batch, savedPath, cancellationToken);
+                // Excel 自动识别：订单文件（含采购单号/订单编号）或客户资料
+                var grids = ExcelReader.Read(savedPath);
+                if (_excelOrderParser.IsOrderWorkbook(grids))
+                {
+                    await CreateOrderFromParseAsync(batch, _excelOrderParser.Parse(grids), cancellationToken);
+                }
+                else
+                {
+                    await ProcessExcelAsync(batch, savedPath, cancellationToken);
+                }
             }
 
             batch.Status = UploadStatus.Completed;
             batch.Progress = 100;
-            batch.ErrorMessage = null;
+            // 注意：此处不能清空 ErrorMessage——解析中写入的「订单已存在，已跳过」等提示
+            // 是列表页区分「重复导入跳过」与「订单已被删除」的唯一依据
         }
         catch (Exception ex)
         {
@@ -230,6 +255,7 @@ public class UploadService : IUploadService
                     Alloy = Get(row, "合金") ?? string.Empty,
                     Spec = spec,
                     Length = ParseNullableDecimal(Get(row, "长度（mm)") ?? Get(row, "长度")),
+                    ShouKou = Get(row, "收口") ?? string.Empty,
                     Raw = string.Join(" | ", row.Values),
                     CreatedAt = DateTime.Now
                 });
@@ -288,14 +314,21 @@ public class UploadService : IUploadService
                     continue;
                 }
 
-                var (customerPartNo, nestPartNo, alloy, spray, length, status) = MatchService.Match(row, parts);
-                item.CustomerPartNo = customerPartNo;
-                item.NestPartNo = nestPartNo;
-                item.Alloy = alloy;
-                item.Spray = spray;
-                item.Length = length;
-                item.MatchStatus = status;
-                if (status != MatchStatus.Matched)
+                var match = MatchService.Match(customer.Name, row, parts);
+                var spec = SpecParser.ParseOrderSpec(row.Spec);
+                item.OuterDiameter = spec.OuterDiameter;
+                item.WallThickness = spec.WallThickness;
+                item.Module = spec.Module;
+                item.ShouKou = spec.ShouKou;
+                item.Material = MatchService.ExtractMaterial(row.Material) is var m && m.Length > 0 ? m : spec.Material;
+                item.CustomerPartNo = match.CustomerPartNo;
+                item.NestPartNo = match.NestPartNo;
+                item.Alloy = match.Alloy;
+                item.Spray = match.Spray;
+                item.Length = spec.Length ?? match.Length;
+                item.Remark = row.Remark;
+                item.MatchStatus = match.Status;
+                if (match.Status != MatchStatus.Matched)
                 {
                     allMatched = false;
                 }
@@ -331,13 +364,44 @@ public class UploadService : IUploadService
         await _orderRepository.SaveChangesAsync(cancellationToken);
     }
 
-    /// <summary>解析 PDF 订单：提取订单号/客户/明细，去重后匹配图号并生成订单。</summary>
+    /// <summary>解析 PDF 订单：文字层解析（无文字层时 OCR），去重后匹配图号并生成订单。</summary>
     private async Task ProcessPdfAsync(UploadBatch batch, string savedPath, CancellationToken cancellationToken)
     {
         var pdf = await _pdfParser.ParseAsync(savedPath, cancellationToken);
+
+        // 无文字层（文字被曲线化，如创达）→ 渲染 + OCR 解析
+        if (pdf.Rows.Count == 0 && _ocrOrderParser.NeedsOcr(savedPath))
+        {
+            _logger.LogInformation("PDF {File} 无文字层，转 OCR 解析", batch.FileName);
+            batch.Progress = 60;
+            await _batchRepository.SaveChangesAsync(cancellationToken);
+            pdf = _ocrOrderParser.Parse(savedPath, cancellationToken);
+        }
+
+        await CreateOrderFromParseAsync(batch, pdf, cancellationToken);
+    }
+
+    /// <summary>
+    /// 由解析结果（PDF / OCR / Excel 订单统一结构）生成订单：订单号去重、客户识别、按客户策略匹配图号。
+    /// </summary>
+    private async Task CreateOrderFromParseAsync(UploadBatch batch, PdfParseResult pdf, CancellationToken cancellationToken)
+    {
         var orderNo = string.IsNullOrEmpty(pdf.OrderNo)
             ? $"ORDER-{DateTime.Now:yyyyMMddHHmmss}"
             : pdf.OrderNo;
+
+        // 客户识别：解析出的客户名精确匹配，否则尝试包含匹配
+        var customer = await FindCustomerAsync(pdf.BuyerName, batch.FileName, cancellationToken);
+
+        // 创达：订单号在行备注中（如 202608031B），优先于表头编号
+        if (IsChuangda(customer?.Name) || IsChuangda(pdf.BuyerName))
+        {
+            var remarkOrderNo = PdfParser.ExtractOrderNoFromRemarks(pdf.Rows);
+            if (remarkOrderNo.Length > 0)
+            {
+                orderNo = remarkOrderNo;
+            }
+        }
 
         // 订单号去重：已存在则跳过创建
         var existingOrder = await _orderRepository.GetByOrderNoAsync(orderNo, cancellationToken);
@@ -347,9 +411,6 @@ public class UploadService : IUploadService
             batch.RawDataJson = JsonSerializer.Serialize(pdf);
             return;
         }
-
-        // 客户识别：解析出的客户名精确匹配，否则尝试从文件名匹配
-        var customer = await FindCustomerAsync(pdf.BuyerName, batch.FileName, cancellationToken);
 
         var order = new OrderMain
         {
@@ -367,15 +428,23 @@ public class UploadService : IUploadService
         var parts = customer is null
             ? new List<CustomerPart>()
             : await _partRepository.ListByCustomerAsync(customer.Id, cancellationToken);
+        var strategyName = customer?.Name ?? pdf.BuyerName;
 
         // 逐行解析明细并匹配客户图号
         var allMatched = true;
         foreach (var row in pdf.Rows)
         {
-            var (customerPartNo, nestPartNo, alloy, spray, length, status) = MatchService.Match(row, parts);
-            if (status != MatchStatus.Matched)
+            var match = MatchService.Match(strategyName, row, parts);
+            if (match.Status != MatchStatus.Matched)
             {
                 allMatched = false;
+            }
+
+            var spec = SpecParser.ParseOrderSpec(row.Spec);
+            var orderMaterial = MatchService.ExtractMaterial(row.Material);
+            if (orderMaterial.Length == 0)
+            {
+                orderMaterial = spec.Material;
             }
 
             order.Items.Add(new OrderItem
@@ -386,17 +455,25 @@ public class UploadService : IUploadService
                 MaterialCode = row.MaterialCode,
                 MaterialName = row.MaterialName,
                 Spec = row.Spec,
-                CustomerPartNo = customerPartNo,
-                NestPartNo = nestPartNo,
-                Alloy = alloy,
-                Spray = spray,
-                Length = length,
+                OuterDiameter = spec.OuterDiameter,
+                WallThickness = spec.WallThickness,
+                Module = spec.Module,
+                ShouKou = spec.ShouKou,
+                Material = orderMaterial,
+                CustomerPartNo = match.CustomerPartNo,
+                NestPartNo = match.NestPartNo,
+                Alloy = match.Alloy,
+                Spray = match.Spray,
+                Length = spec.Length ?? match.Length,
                 Quantity = row.Quantity,
                 Unit = row.Unit,
                 Price = row.Price,
                 Amount = row.Amount,
                 ReceiveDate = row.ReceiveDate,
-                MatchStatus = status,
+                Remark = row.Remark,
+                MatchStatus = match.Status,
+                MaterialSyncStatus = MaterialSyncStatus.NotSynced,
+                ItemPushStatus = ItemPushStatus.NotPushed,
                 CreatedAt = DateTime.Now
             });
         }
@@ -422,9 +499,20 @@ public class UploadService : IUploadService
             await _orderRepository.AddAsync(order, cancellationToken);
             await _orderRepository.SaveChangesAsync(cancellationToken);
         }
+        else
+        {
+            // 未解析出任何明细行：明确记录「未生成订单」，避免列表页误标为「订单已删除」
+            batch.ErrorMessage = "未解析出有效订单明细，未生成订单";
+        }
 
         batch.CustomerId = customer?.Id;
         batch.RawDataJson = JsonSerializer.Serialize(pdf);
+    }
+
+    /// <summary>是否创达客户。</summary>
+    private static bool IsChuangda(string? name)
+    {
+        return !string.IsNullOrWhiteSpace(name) && name.Contains("创达");
     }
 
     /// <summary>按客户名识别客户：先精确匹配，再尝试包含匹配。</summary>
@@ -546,6 +634,7 @@ public class UploadService : IUploadService
                     Spec = i.Spec,
                     Quantity = i.Quantity,
                     Unit = i.Unit,
+                    Remark = i.Remark,
                     CustomerPartNo = i.CustomerPartNo,
                     NestPartNo = i.NestPartNo,
                     MatchStatus = i.MatchStatus

@@ -27,7 +27,7 @@ public class PdfParseResult
     public string RawText { get; set; } = string.Empty;
 }
 
-/// <summary>PDF 明细行解析结果。</summary>
+/// <summary>PDF / Excel 订单明细行解析结果（统一行模型）。</summary>
 public class PdfParseRow
 {
     /// <summary>行号。</summary>
@@ -41,6 +41,9 @@ public class PdfParseRow
 
     /// <summary>规格型号。</summary>
     public string Spec { get; set; } = string.Empty;
+
+    /// <summary>材质（三可等客户单独列，如 3F03+Zn-H112）。</summary>
+    public string Material { get; set; } = string.Empty;
 
     /// <summary>单位。</summary>
     public string Unit { get; set; } = string.Empty;

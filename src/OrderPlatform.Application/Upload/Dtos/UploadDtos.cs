@@ -58,6 +58,9 @@ public class MatchResultItem
     /// <summary>单位。</summary>
     public string Unit { get; set; } = string.Empty;
 
+    /// <summary>行备注（创达订单号所在列）。</summary>
+    public string Remark { get; set; } = string.Empty;
+
     /// <summary>匹配到的客户图号。</summary>
     public string? CustomerPartNo { get; set; }
 

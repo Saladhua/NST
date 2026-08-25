@@ -73,6 +73,7 @@ public class OrderDbContext : DbContext
         part.Property(x => x.Alloy).HasMaxLength(50);
         part.Property(x => x.Spec).HasMaxLength(255);
         part.Property(x => x.Length).HasColumnType("decimal(18,2)");
+        part.Property(x => x.ShouKou).HasMaxLength(50);
         part.Property(x => x.Raw);
         part.HasIndex(x => x.CustomerId);
 
@@ -121,6 +122,11 @@ public class OrderDbContext : DbContext
         item.Property(x => x.MaterialCode).HasMaxLength(100);
         item.Property(x => x.MaterialName).HasMaxLength(255);
         item.Property(x => x.Spec).HasMaxLength(255);
+        item.Property(x => x.OuterDiameter).HasColumnType("decimal(18,4)");
+        item.Property(x => x.WallThickness).HasColumnType("decimal(18,4)");
+        item.Property(x => x.Module).HasColumnType("decimal(18,4)");
+        item.Property(x => x.ShouKou).HasMaxLength(50);
+        item.Property(x => x.Material).HasMaxLength(50);
         item.Property(x => x.CustomerPartNo).HasMaxLength(100);
         item.Property(x => x.NestPartNo).HasMaxLength(100);
         item.Property(x => x.Alloy).HasMaxLength(50);
@@ -130,7 +136,11 @@ public class OrderDbContext : DbContext
         item.Property(x => x.Unit).HasMaxLength(20);
         item.Property(x => x.Price).HasColumnType("decimal(18,4)");
         item.Property(x => x.Amount).HasColumnType("decimal(18,2)");
+        item.Property(x => x.Remark).HasMaxLength(500);
         item.Property(x => x.MatchStatus).HasConversion<string>().HasMaxLength(20);
+        item.Property(x => x.ErpPrdNo).HasMaxLength(100);
+        item.Property(x => x.MaterialSyncStatus).HasConversion<string>().HasMaxLength(20);
+        item.Property(x => x.ItemPushStatus).HasConversion<string>().HasMaxLength(20);
         item.HasIndex(x => x.OrderId);
 
         // 推送日志：按订单索引

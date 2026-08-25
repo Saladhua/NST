@@ -1,19 +1,36 @@
-// 订单详情页：展示订单头信息与明细行，可刷新详情、推送订单。
+// 订单详情页：展示订单头信息与明细行（规格/长度/收口/材质拆分列、物料同步状态、行级推送状态），
+// 支持整单/单行物料同步、行级推送（部分关联订单可推送已匹配行），推送后展示结果与 ERP 报文。
 import { useCallback, useEffect, useState } from 'react';
 import {
   App,
   Button,
   Card,
   Descriptions,
+  Modal,
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
-import { ArrowLeftOutlined, PushpinOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  CloudSyncOutlined,
+  PushpinOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router';
 import { orderApi } from '../../api/order';
-import type { MatchStatus, OrderDetailDto, OrderItemDto } from '../../types';
+import type {
+  ErpApiCall,
+  ItemPushStatus,
+  MatchStatus,
+  MaterialSyncStatus,
+  OrderDetailDto,
+  OrderItemDto,
+  PushResult,
+  PushStatus,
+} from '../../types';
 
 function matchStatusTag(status: MatchStatus) {
   const map: Record<string, { color: string; text: string }> = {
@@ -25,14 +42,142 @@ function matchStatusTag(status: MatchStatus) {
   return <Tag color={item.color}>{item.text}</Tag>;
 }
 
+function pushStatusTag(status: PushStatus) {
+  const map: Record<string, { color: string; text: string }> = {
+    NotPushed: { color: 'default', text: '未推送' },
+    PartialPushed: { color: 'processing', text: '部分推送' },
+    Pushed: { color: 'success', text: '已推送' },
+    Failed: { color: 'error', text: '推送失败' },
+  };
+  const item = map[status] ?? { color: 'default', text: status };
+  return <Tag color={item.color}>{item.text}</Tag>;
+}
+
+function materialSyncTag(status: MaterialSyncStatus, prdNo: string) {
+  const map: Record<string, { color: string; text: string }> = {
+    NotSynced: { color: 'default', text: '未同步' },
+    Synced: { color: 'success', text: '已同步' },
+    NotFound: { color: 'warning', text: '未找到' },
+    Failed: { color: 'error', text: '失败' },
+  };
+  const item = map[status] ?? { color: 'default', text: status };
+  return (
+    <Tooltip title={status === 'Synced' && prdNo ? `货品代号：${prdNo}` : undefined}>
+      <Tag color={item.color}>{item.text}</Tag>
+    </Tooltip>
+  );
+}
+
+function itemPushTag(status: ItemPushStatus) {
+  const map: Record<string, { color: string; text: string }> = {
+    NotPushed: { color: 'default', text: '未推送' },
+    Pushed: { color: 'success', text: '已推送' },
+    Failed: { color: 'error', text: '失败' },
+  };
+  const item = map[status] ?? { color: 'default', text: status };
+  return <Tag color={item.color}>{item.text}</Tag>;
+}
+
+/** ERP 报文格式化：JSON 则美化缩进，否则原文展示。 */
+function formatPayload(text: string): string {
+  if (!text) {
+    return '（空）';
+  }
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+/** 推送调用轨迹报文（可折叠的只读代码块）。 */
+function ErpCallList({ calls }: { calls: ErpApiCall[] }) {
+  if (calls.length === 0) {
+    return <Typography.Text type="secondary">无 ERP 调用记录</Typography.Text>;
+  }
+  return (
+    <div className="space-y-2">
+      {calls.map((call, index) => (
+        <details
+          key={index}
+          open={!call.success}
+          style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: '6px 10px' }}
+        >
+          <summary style={{ cursor: 'pointer' }}>
+            <Space size={8}>
+              <Tag color={call.success ? 'success' : 'error'}>{call.success ? '成功' : '失败'}</Tag>
+              <Typography.Text strong>{call.action}</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {call.httpStatus ?? '-'} · {call.durationMs}ms{call.error ? ` · ${call.error}` : ''}
+              </Typography.Text>
+            </Space>
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 4, fontSize: 12 }}>
+              请求报文：
+            </Typography.Paragraph>
+            <pre className="max-h-40 overflow-auto rounded bg-gray-50 p-2 text-xs whitespace-pre-wrap break-all">
+              {formatPayload(call.requestJson)}
+            </pre>
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 4, marginTop: 8, fontSize: 12 }}>
+              响应报文：
+            </Typography.Paragraph>
+            <pre className="max-h-64 overflow-auto rounded bg-gray-50 p-2 text-xs whitespace-pre-wrap break-all">
+              {formatPayload(call.response)}
+            </pre>
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+/** 弹窗展示推送结果与 ERP 返回报文。 */
+function usePushResultModal() {
+  const [result, setResult] = useState<PushResult | null>(null);
+  const close = () => setResult(null);
+  const modal = result && (
+    <Modal
+      title={
+        <Space>
+          <Tag color={result.status === 'Success' ? 'success' : result.status === 'Partial' ? 'warning' : 'error'}>
+            {result.status === 'Success' ? '推送成功' : result.status === 'Partial' ? '部分推送成功' : '推送失败'}
+          </Tag>
+          {result.osNo ? `ERP 受订单号：${result.osNo}` : '未取得受订单号'}
+        </Space>
+      }
+      open
+      footer={<Button type="primary" onClick={close}>知道了</Button>}
+      width={760}
+      onCancel={close}
+    >
+      <Descriptions size="small" column={3} bordered className="mb-4">
+        <Descriptions.Item label="待推行数">{result.totalCount}</Descriptions.Item>
+        <Descriptions.Item label="成功行数">{result.pushedCount}</Descriptions.Item>
+        <Descriptions.Item label="失败行数">{result.failedCount}</Descriptions.Item>
+      </Descriptions>
+      {result.errorMessage && (
+        <Typography.Paragraph type="danger" className="mb-4">
+          {result.errorMessage}
+        </Typography.Paragraph>
+      )}
+      <Typography.Title level={5}>ERP 调用报文</Typography.Title>
+      <ErpCallList calls={result.erpCalls} />
+    </Modal>
+  );
+  return { show: setResult, modal };
+}
+
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { message } = App.useApp();
   const navigate = useNavigate();
+  const pushResult = usePushResultModal();
 
   const [detail, setDetail] = useState<OrderDetailDto | null>(null);
   const [loading, setLoading] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   // 加载订单详情
   const load = useCallback(async () => {
@@ -53,61 +198,150 @@ export default function OrderDetailPage() {
     void load();
   }, [load]);
 
-  // 推送当前订单
+  // 推送当前订单（行级：只推未推送且已匹配的行），完成后弹窗展示结果与 ERP 报文
   const pushOrder = async () => {
     if (!id) {
       return;
     }
     setPushing(true);
     try {
-      await orderApi.push(id);
-      message.success('推送成功');
+      const result = await orderApi.push(id);
+      pushResult.show(result);
       await load();
     } catch {
-      message.error('推送失败，请重试');
+      message.error('推送请求失败，请检查网络或 ERP 服务后重试');
     } finally {
       setPushing(false);
     }
   };
 
+  // 整单物料同步
+  const syncOrderMaterial = async () => {
+    if (!id) {
+      return;
+    }
+    setSyncing(true);
+    try {
+      const result = await orderApi.syncMaterial(id);
+      message.success(`物料同步完成：成功 ${result.synced}，未找到 ${result.notFound}，失败 ${result.failed}`);
+      await load();
+    } catch {
+      message.error('物料同步失败，请重试');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // 单行物料同步
+  const syncItemMaterial = async (itemId: string) => {
+    if (!id) {
+      return;
+    }
+    try {
+      await orderApi.syncMaterial(id, itemId);
+      message.success('物料同步完成');
+      await load();
+    } catch {
+      message.error('物料同步失败');
+    }
+  };
+
   const columns = [
-    { title: '行号', dataIndex: 'lineNo', key: 'lineNo', width: 60 },
-    { title: '物料编码', dataIndex: 'materialCode', key: 'materialCode', width: 180 },
-    { title: '规格', dataIndex: 'spec', key: 'spec', width: 180 },
-    { title: '客户图号', dataIndex: 'customerPartNo', key: 'customerPartNo', width: 140 },
-    { title: '套图图号', dataIndex: 'nestPartNo', key: 'nestPartNo', width: 140 },
+    { title: '行号', dataIndex: 'lineNo', key: 'lineNo', width: 55 },
+    { title: '物料编码', dataIndex: 'materialCode', key: 'materialCode', width: 170 },
+    { title: '规格', dataIndex: 'spec', key: 'spec', width: 170, ellipsis: true },
+    {
+      title: '长度',
+      dataIndex: 'length',
+      key: 'length',
+      width: 80,
+      render: (value: number | null) => (value === null ? '-' : value),
+    },
+    {
+      title: '收口',
+      dataIndex: 'shouKou',
+      key: 'shouKou',
+      width: 70,
+      render: (value: string) => value || '-',
+    },
+    {
+      title: '材质',
+      dataIndex: 'material',
+      key: 'material',
+      width: 80,
+      render: (value: string) => value || '-',
+    },
+    { title: '客户图号', dataIndex: 'customerPartNo', key: 'customerPartNo', width: 120, ellipsis: true },
+    { title: '套图图号', dataIndex: 'nestPartNo', key: 'nestPartNo', width: 110, ellipsis: true },
+    {
+      title: '行备注',
+      dataIndex: 'remark',
+      key: 'remark',
+      width: 180,
+      ellipsis: true,
+      render: (value: string) =>
+        value ? (
+          <Tooltip title={value}>
+            <span>{value}</span>
+          </Tooltip>
+        ) : (
+          '-'
+        ),
+    },
     {
       title: '数量',
       dataIndex: 'quantity',
       key: 'quantity',
-      width: 110,
+      width: 90,
       render: (value: number) => value.toLocaleString('zh-CN'),
-    },
-    {
-      title: '单价（元）',
-      dataIndex: 'price',
-      key: 'price',
-      width: 100,
-      render: (value: number) => value.toFixed(2),
     },
     {
       title: '金额（元）',
       dataIndex: 'amount',
       key: 'amount',
-      width: 120,
+      width: 100,
       render: (value: number) => value.toLocaleString('zh-CN', { minimumFractionDigits: 2 }),
     },
     {
       title: '关联状态',
       dataIndex: 'matchStatus',
       key: 'matchStatus',
-      width: 100,
+      width: 90,
       render: (value: MatchStatus) => matchStatusTag(value),
+    },
+    {
+      title: '物料同步',
+      key: 'materialSync',
+      width: 150,
+      render: (_: unknown, record: OrderItemDto) =>
+        record.matchStatus === 'Matched' ? (
+          <Space size={4}>
+            {materialSyncTag(record.materialSyncStatus, record.erpPrdNo)}
+            {record.materialSyncStatus !== 'Synced' && (
+              <Button type="link" size="small" onClick={() => void syncItemMaterial(record.id)}>
+                同步
+              </Button>
+            )}
+          </Space>
+        ) : (
+          '-'
+        ),
+    },
+    {
+      title: '行推送',
+      dataIndex: 'itemPushStatus',
+      key: 'itemPushStatus',
+      width: 85,
+      render: (value: ItemPushStatus) => itemPushTag(value),
     },
   ];
 
   // 已关联明细行数（用于展示关联占比）
   const matchedCount = detail?.items.filter((i) => i.matchStatus === 'Matched').length ?? 0;
+  const pushedCount = detail?.items.filter((i) => i.itemPushStatus === 'Pushed').length ?? 0;
+  // 是否还有可推送的行（未推送/失败且已匹配）
+  const hasPushable =
+    (detail?.items.some((i) => i.itemPushStatus !== 'Pushed' && i.matchStatus === 'Matched') ?? false);
 
   return (
     <div className="space-y-4">
@@ -124,15 +358,25 @@ export default function OrderDetailPage() {
         title="订单信息"
         loading={loading}
         extra={
-          <Button
-            type="primary"
-            icon={<PushpinOutlined />}
-            disabled={detail?.pushStatus === 'Pushed'}
-            loading={pushing}
-            onClick={() => void pushOrder()}
-          >
-            {detail?.pushStatus === 'Pushed' ? '已推送' : '推送'}
-          </Button>
+          <Space>
+            <Button
+              icon={<CloudSyncOutlined />}
+              loading={syncing}
+              disabled={!matchedCount}
+              onClick={() => void syncOrderMaterial()}
+            >
+              同步物料
+            </Button>
+            <Button
+              type="primary"
+              icon={<PushpinOutlined />}
+              disabled={detail?.pushStatus === 'Pushed' || !hasPushable}
+              loading={pushing}
+              onClick={() => void pushOrder()}
+            >
+              {detail?.pushStatus === 'Pushed' ? '已推送' : '推送'}
+            </Button>
+          </Space>
         }
       >
         {detail && (
@@ -150,14 +394,10 @@ export default function OrderDetailPage() {
               {new Date(detail.createdAt).toLocaleString('zh-CN')}
             </Descriptions.Item>
             <Descriptions.Item label="关联状态">{matchStatusTag(detail.parseStatus)}</Descriptions.Item>
-            <Descriptions.Item label="推送状态">
-              <Tag color={detail.pushStatus === 'Pushed' ? 'success' : 'default'}>
-                {detail.pushStatus === 'Pushed' ? '已推送' : detail.pushStatus === 'Failed' ? '推送失败' : '未推送'}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="关联行占比">
+            <Descriptions.Item label="推送状态">{pushStatusTag(detail.pushStatus)}</Descriptions.Item>
+            <Descriptions.Item label="关联 / 推送行">
               <Typography.Text>
-                {matchedCount} / {detail.items.length}
+                关联 {matchedCount} / {detail.items.length}，已推 {pushedCount} 行
               </Typography.Text>
             </Descriptions.Item>
           </Descriptions>
@@ -172,9 +412,11 @@ export default function OrderDetailPage() {
           loading={loading}
           pagination={false}
           size="small"
-          scroll={{ x: 1000 }}
+          scroll={{ x: 1700 }}
         />
       </Card>
+
+      {pushResult.modal}
     </div>
   );
 }

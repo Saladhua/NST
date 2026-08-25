@@ -22,4 +22,8 @@
     <ProjectReference Include="..\OrderPlatform.Infrastructure\OrderPlatform.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="models\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

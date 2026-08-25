@@ -47,8 +47,12 @@ export interface PagedResult<T> {
 
 /** 关联状态：已关联 / 部分关联 / 未关联。 */
 export type MatchStatus = 'Matched' | 'Partial' | 'Unmatched';
-/** 推送状态：未推送 / 已推送 / 推送失败。 */
-export type PushStatus = 'NotPushed' | 'Pushed' | 'Failed';
+/** 推送状态：未推送 / 部分推送 / 已推送 / 推送失败。 */
+export type PushStatus = 'NotPushed' | 'PartialPushed' | 'Pushed' | 'Failed';
+/** 物料同步状态：未同步 / 已同步 / 未找到 / 失败。 */
+export type MaterialSyncStatus = 'NotSynced' | 'Synced' | 'NotFound' | 'Failed';
+/** 行级推送状态：未推送 / 已推送 / 失败。 */
+export type ItemPushStatus = 'NotPushed' | 'Pushed' | 'Failed';
 /** 用户角色（注意：后端实际为 Admin / User，此处 Operator 用于界面显示操作员）。 */
 export type UserRole = 'Admin' | 'Operator';
 /** 用户状态：启用 / 禁用。 */
@@ -75,6 +79,11 @@ export interface OrderItemDto {
   materialCode: string;
   materialName: string;
   spec: string;
+  outerDiameter: number | null;
+  wallThickness: number | null;
+  module: number | null;
+  shouKou: string;
+  material: string;
   customerPartNo: string;
   nestPartNo: string;
   alloy: string;
@@ -85,13 +94,45 @@ export interface OrderItemDto {
   price: number;
   amount: number;
   receiveDate: string | null;
+  /** 行备注（创达订单号所在列）。 */
+  remark: string;
   matchStatus: MatchStatus;
+  erpPrdNo: string;
+  materialSyncStatus: MaterialSyncStatus;
+  itemPushStatus: ItemPushStatus;
 }
 
 /** 订单详情（列表项 + 来源批次 + 明细）。 */
 export interface OrderDetailDto extends OrderListDto {
   sourceFileId: string | null;
   items: OrderItemDto[];
+}
+
+/** ERP 单次接口调用的报文记录。 */
+export interface ErpApiCall {
+  action: string;
+  /** 实际发送的 JSON 请求报文（原文）。 */
+  requestJson: string;
+  httpStatus: number | null;
+  /** ERP 原始响应报文（原文）。 */
+  response: string;
+  durationMs: number;
+  success: boolean;
+  error: string | null;
+}
+
+/** 订单推送结果（含成功/失败统计与 ERP 报文轨迹）。 */
+export interface PushResult {
+  logId: string;
+  orderId: string;
+  status: 'Success' | 'Partial' | 'Failed';
+  pushTime: string;
+  osNo: string | null;
+  totalCount: number;
+  pushedCount: number;
+  failedCount: number;
+  errorMessage: string | null;
+  erpCalls: ErpApiCall[];
 }
 
 /** 上传批次 DTO。 */
@@ -152,6 +193,8 @@ export interface MatchResultItem {
   spec: string;
   quantity: number;
   unit: string;
+  /** 行备注（创达订单号所在列）。 */
+  remark: string;
   customerPartNo: string | null;
   nestPartNo: string | null;
   matchStatus: MatchStatus;

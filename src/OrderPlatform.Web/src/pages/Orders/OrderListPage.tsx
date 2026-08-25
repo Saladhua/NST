@@ -1,14 +1,14 @@
 // 订单列表页：支持关键词、客户、关联状态、推送状态筛选；
-// 可查看详情、推送订单，管理员可删除未推送订单。
+// 可查看详情、推送订单（推送后弹窗展示结果与 ERP 报文），管理员可删除未推送订单。
 import { useCallback, useEffect, useState } from 'react';
-import { App, Button, Card, Input, Select, Space, Table, Tag, Tooltip } from 'antd';
+import { App, Button, Card, Descriptions, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router';
 import dayjs from 'dayjs';
 import { orderApi } from '../../api/order';
 import { uploadApi } from '../../api/upload';
 import { useAuthStore } from '../../store/authStore';
-import type { CustomerImportDto, MatchStatus, OrderListDto, PushStatus } from '../../types';
+import type { CustomerImportDto, ErpApiCall, MatchStatus, OrderListDto, PushResult, PushStatus } from '../../types';
 
 // 关联状态筛选项
 const parseStatusOptions = [
@@ -20,6 +20,7 @@ const parseStatusOptions = [
 // 推送状态筛选项
 const pushStatusOptions = [
   { value: 'NotPushed', label: '未推送' },
+  { value: 'PartialPushed', label: '部分推送' },
   { value: 'Pushed', label: '已推送' },
   { value: 'Failed', label: '推送失败' },
 ];
@@ -37,11 +38,24 @@ function matchStatusTag(status: MatchStatus) {
 function pushStatusTag(status: PushStatus) {
   const map: Record<string, { color: string; text: string }> = {
     NotPushed: { color: 'default', text: '未推送' },
+    PartialPushed: { color: 'processing', text: '部分推送' },
     Pushed: { color: 'success', text: '已推送' },
     Failed: { color: 'error', text: '推送失败' },
   };
   const item = map[status] ?? { color: 'default', text: status };
   return <Tag color={item.color}>{item.text}</Tag>;
+}
+
+/** ERP 报文格式化：JSON 则美化缩进，否则原文展示。 */
+function formatPayload(text: string): string {
+  if (!text) {
+    return '（空）';
+  }
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
 }
 
 export default function OrderListPage() {
@@ -59,6 +73,8 @@ export default function OrderListPage() {
   const [pushStatus, setPushStatus] = useState<PushStatus | undefined>();
   const [parseStatus, setParseStatus] = useState<MatchStatus | undefined>();
   const [customers, setCustomers] = useState<CustomerImportDto[]>([]);
+  // 正在推送的订单 ID（按钮 loading 反馈，避免「点了没反应」）
+  const [pushingId, setPushingId] = useState<string | null>(null);
 
   // 加载客户下拉列表
   const loadCustomers = useCallback(async () => {
@@ -95,15 +111,88 @@ export default function OrderListPage() {
     void loadCustomers();
   }, [load, loadCustomers]);
 
-  // 推送订单到客户系统
+  // 推送订单到 ERP，完成后弹窗展示成功/失败与 ERP 返回报文
   const pushOrder = async (id: string) => {
+    setPushingId(id);
     try {
-      await orderApi.push(id);
-      message.success('推送成功');
+      const result = await orderApi.push(id);
+      showPushResult(result);
       void load();
     } catch {
-      message.error('推送失败，请重试');
+      message.error('推送请求失败，请检查网络或 ERP 服务后重试');
+    } finally {
+      setPushingId(null);
     }
+  };
+
+  // 弹窗展示推送结果与 ERP 报文
+  const showPushResult = (result: PushResult) => {
+    const statusTag =
+      result.status === 'Success' ? 'success' : result.status === 'Partial' ? 'warning' : 'error';
+    const statusText =
+      result.status === 'Success' ? '推送成功' : result.status === 'Partial' ? '部分推送成功' : '推送失败';
+    modal.info({
+      title: (
+        <Space>
+          <Tag color={statusTag}>{statusText}</Tag>
+          {result.osNo ? `ERP 受订单号：${result.osNo}` : '未取得受订单号'}
+        </Space>
+      ),
+      width: 760,
+      okText: '知道了',
+      content: (
+        <div className="mt-4">
+          <Descriptions size="small" column={3} bordered className="mb-4">
+            <Descriptions.Item label="待推行数">{result.totalCount}</Descriptions.Item>
+            <Descriptions.Item label="成功行数">{result.pushedCount}</Descriptions.Item>
+            <Descriptions.Item label="失败行数">{result.failedCount}</Descriptions.Item>
+          </Descriptions>
+          {result.errorMessage && (
+            <Typography.Paragraph type="danger" className="mb-4">
+              {result.errorMessage}
+            </Typography.Paragraph>
+          )}
+          <Typography.Title level={5}>ERP 调用报文</Typography.Title>
+          {(result.erpCalls as ErpApiCall[]).length === 0 ? (
+            <Typography.Text type="secondary">无 ERP 调用记录</Typography.Text>
+          ) : (
+            <div className="space-y-2">
+              {(result.erpCalls as ErpApiCall[]).map((call, index) => (
+                <details
+                  key={index}
+                  open={!call.success}
+                  style={{ border: '1px solid #f0f0f0', borderRadius: 6, padding: '6px 10px' }}
+                >
+                  <summary style={{ cursor: 'pointer' }}>
+                    <Space size={8}>
+                      <Tag color={call.success ? 'success' : 'error'}>{call.success ? '成功' : '失败'}</Tag>
+                      <Typography.Text strong>{call.action}</Typography.Text>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {call.httpStatus ?? '-'} · {call.durationMs}ms{call.error ? ` · ${call.error}` : ''}
+                      </Typography.Text>
+                    </Space>
+                  </summary>
+                  <div style={{ marginTop: 8 }}>
+                    <Typography.Paragraph type="secondary" style={{ marginBottom: 4, fontSize: 12 }}>
+                      请求报文：
+                    </Typography.Paragraph>
+                    <pre className="max-h-40 overflow-auto rounded bg-gray-50 p-2 text-xs whitespace-pre-wrap break-all">
+                      {formatPayload(call.requestJson)}
+                    </pre>
+                    <Typography.Paragraph type="secondary" style={{ marginBottom: 4, marginTop: 8, fontSize: 12 }}>
+                      响应报文：
+                    </Typography.Paragraph>
+                    <pre className="max-h-64 overflow-auto rounded bg-gray-50 p-2 text-xs whitespace-pre-wrap break-all">
+                      {formatPayload(call.response)}
+                    </pre>
+                  </div>
+                </details>
+              ))}
+            </div>
+          )}
+        </div>
+      ),
+    });
   };
 
   const deleteOrder = async (id: string) => {
@@ -194,19 +283,20 @@ export default function OrderListPage() {
           <Button
             type="link"
             size="small"
-            disabled={record.pushStatus === 'Pushed'}
+            loading={pushingId === record.id}
+            disabled={record.pushStatus === 'Pushed' || (pushingId !== null && pushingId !== record.id)}
             onClick={() => void pushOrder(record.id)}
           >
-            推送
+            {pushingId === record.id ? '推送中...' : record.pushStatus === 'PartialPushed' ? '继续推送' : '推送'}
           </Button>
           {isAdmin && (
-            <Tooltip title={record.pushStatus === 'Pushed' ? '已推送的订单不可删除' : ''}>
+            <Tooltip title={record.pushStatus === 'Pushed' || record.pushStatus === 'PartialPushed' ? '已推送（含部分推送）的订单不可删除' : ''}>
               <Button
                 type="link"
                 size="small"
                 danger
                 icon={<DeleteOutlined />}
-                disabled={record.pushStatus === 'Pushed'}
+                disabled={record.pushStatus === 'Pushed' || record.pushStatus === 'PartialPushed'}
                 onClick={() => handleDeleteOrder(record)}
               >
                 删除

@@ -51,12 +51,26 @@ public class OrderController : ControllerBase
         return OrderPlatform.Shared.Api.ApiResponse<OrderDetailDto>.Ok(result);
     }
 
-    /// <summary>推送订单。</summary>
+    /// <summary>推送订单（行级：只推未推送且已匹配的行）。无论成败均返回详细结果与 ERP 报文，由前端按 Status 展示。</summary>
     [HttpPost("push")]
     public async Task<OrderPlatform.Shared.Api.ApiResponse<PushResultDto>> Push(PushOrderRequest request, CancellationToken cancellationToken)
     {
         var result = await _orderService.PushAsync(request.OrderId, cancellationToken);
-        return OrderPlatform.Shared.Api.ApiResponse<PushResultDto>.Ok(result, "推送成功");
+        var message = result.Status switch
+        {
+            "Success" => $"推送成功，共 {result.PushedCount} 行",
+            "Partial" => $"部分推送成功（成功 {result.PushedCount} 行 / 失败 {result.FailedCount} 行）",
+            _ => "推送失败"
+        };
+        return OrderPlatform.Shared.Api.ApiResponse<PushResultDto>.Ok(result, message);
+    }
+
+    /// <summary>物料同步：按 图号+长度 查询 ERP 货品代号（itemId 为空时同步整单已匹配行）。</summary>
+    [HttpPost("sync-material")]
+    public async Task<OrderPlatform.Shared.Api.ApiResponse<MaterialSyncResultDto>> SyncMaterial(SyncMaterialRequest request, CancellationToken cancellationToken)
+    {
+        var result = await _orderService.SyncMaterialAsync(request.OrderId, request.ItemId, cancellationToken);
+        return OrderPlatform.Shared.Api.ApiResponse<MaterialSyncResultDto>.Ok(result, "物料同步完成");
     }
 
     /// <summary>删除订单（仅管理员，已推送订单不可删）。</summary>
