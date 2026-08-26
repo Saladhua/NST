@@ -65,6 +65,15 @@ public class OrderController : ControllerBase
         return OrderPlatform.Shared.Api.ApiResponse<PushResultDto>.Ok(result, message);
     }
 
+    /// <summary>批量推送订单（逐个复用推送逻辑，单笔异常记为失败且不影响其余订单）。</summary>
+    [HttpPost("batch-push")]
+    public async Task<OrderPlatform.Shared.Api.ApiResponse<BatchPushResultDto>> BatchPush(BatchPushOrderRequest request, CancellationToken cancellationToken)
+    {
+        var result = await _orderService.BatchPushAsync(request.OrderIds, cancellationToken);
+        var message = $"批量推送完成：成功 {result.SuccessCount} 单 / 失败 {result.FailedCount} 单";
+        return OrderPlatform.Shared.Api.ApiResponse<BatchPushResultDto>.Ok(result, message);
+    }
+
     /// <summary>物料同步：按 图号+长度 查询 ERP 货品代号（itemId 为空时同步整单已匹配行）。</summary>
     [HttpPost("sync-material")]
     public async Task<OrderPlatform.Shared.Api.ApiResponse<MaterialSyncResultDto>> SyncMaterial(SyncMaterialRequest request, CancellationToken cancellationToken)
@@ -88,4 +97,11 @@ public class PushOrderRequest
 {
     /// <summary>订单 ID。</summary>
     public Guid OrderId { get; set; }
+}
+
+/// <summary>批量推送订单请求。</summary>
+public class BatchPushOrderRequest
+{
+    /// <summary>订单 ID 列表。</summary>
+    public List<Guid> OrderIds { get; set; } = new();
 }

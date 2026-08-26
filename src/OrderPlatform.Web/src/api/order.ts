@@ -1,6 +1,7 @@
 // 订单接口封装（列表、详情、推送、物料同步、删除）。
 import http from './http';
 import type {
+  BatchPushResult,
   OrderDetailDto,
   OrderListDto,
   PagedResult,
@@ -37,6 +38,9 @@ export const orderApi = {
   // 推送订单（行级：只推未推送且已匹配的行；ERP 调用多、耗时长，单独放宽超时到 120 秒）
   push: (orderId: string) =>
     http.post<PushResult>('/order/push', { orderId }, { timeout: 120000 }),
+  // 批量推送（逐单推送、可能较慢，放宽超时到 10 分钟）
+  batchPush: (orderIds: string[]) =>
+    http.post<BatchPushResult>('/order/batch-push', { orderIds }, { timeout: 600000 }),
   // 物料同步（itemId 为空时同步整单已匹配行）
   syncMaterial: (orderId: string, itemId?: string) =>
     http.post<MaterialSyncResult>('/order/sync-material', { orderId, itemId }),

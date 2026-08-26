@@ -211,6 +211,41 @@ public class PushResultDto
     public List<ErpApiCallDto> ErpCalls { get; set; } = new();
 }
 
+/// <summary>批量推送结果（前端按 OrderId 关联订单号展示）。</summary>
+public class BatchPushResultDto
+{
+    /// <summary>本次处理订单数。</summary>
+    public int Total { get; set; }
+
+    /// <summary>推送成功单数（Success + Partial）。</summary>
+    public int SuccessCount { get; set; }
+
+    /// <summary>推送失败单数（Failed 或异常）。</summary>
+    public int FailedCount { get; set; }
+
+    /// <summary>逐单结果。</summary>
+    public List<BatchPushItemResultDto> Results { get; set; } = new();
+}
+
+/// <summary>批量推送中单个订单的结果。</summary>
+public class BatchPushItemResultDto
+{
+    /// <summary>订单 ID。</summary>
+    public Guid OrderId { get; set; }
+
+    /// <summary>推送状态：Success / Partial / Failed。</summary>
+    public string Status { get; set; } = "Failed";
+
+    /// <summary>推送成功行数。</summary>
+    public int PushedCount { get; set; }
+
+    /// <summary>推送失败行数。</summary>
+    public int FailedCount { get; set; }
+
+    /// <summary>失败原因（异常或单笔推送的失败汇总）。</summary>
+    public string? ErrorMessage { get; set; }
+}
+
 /// <summary>ERP 单次接口调用的报文记录（返回给前端展示用）。</summary>
 public class ErpApiCallDto
 {

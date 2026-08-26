@@ -135,6 +135,23 @@ export interface PushResult {
   erpCalls: ErpApiCall[];
 }
 
+/** 批量推送中单个订单的结果。 */
+export interface BatchPushItemResult {
+  orderId: string;
+  status: 'Success' | 'Partial' | 'Failed';
+  pushedCount: number;
+  failedCount: number;
+  errorMessage: string | null;
+}
+
+/** 批量推送结果（汇总 + 逐单明细，订单号由前端按 orderId 关联）。 */
+export interface BatchPushResult {
+  total: number;
+  successCount: number;
+  failedCount: number;
+  results: BatchPushItemResult[];
+}
+
 /** 上传批次 DTO。 */
 export interface UploadBatchDto {
   batchId: string;

@@ -21,6 +21,9 @@ public interface IOrderService
     /// <summary>推送订单（行级：只推未推送且已匹配的行，已推送行自动跳过）。无论成败均返回详细结果与 ERP 报文。</summary>
     Task<PushResultDto> PushAsync(Guid orderId, CancellationToken cancellationToken);
 
+    /// <summary>批量推送订单：逐单复用推送逻辑，单笔异常记为失败且不中断其余订单。</summary>
+    Task<BatchPushResultDto> BatchPushAsync(IEnumerable<Guid> orderIds, CancellationToken cancellationToken);
+
     /// <summary>物料同步：按 图号+长度 调 ERP 查询货品代号并回填状态（单行或整单）。</summary>
     Task<MaterialSyncResultDto> SyncMaterialAsync(Guid orderId, Guid? itemId, CancellationToken cancellationToken);
 
@@ -310,6 +313,49 @@ public class OrderService : IOrderService
                 Success = c.Success,
                 Error = c.Error
             }).ToList()
+        };
+    }
+
+    /// <summary>
+    /// 批量推送订单：逐单复用 <see cref="PushAsync"/>，单笔异常（已推送/无待推行/订单不存在等）
+    /// 记为失败并继续推送其余订单，最终汇总成功/失败单数。
+    /// </summary>
+    public async Task<BatchPushResultDto> BatchPushAsync(IEnumerable<Guid> orderIds, CancellationToken cancellationToken)
+    {
+        var ids = orderIds.Distinct().ToList();
+        var results = new List<BatchPushItemResultDto>();
+
+        foreach (var id in ids)
+        {
+            try
+            {
+                var r = await PushAsync(id, cancellationToken);
+                results.Add(new BatchPushItemResultDto
+                {
+                    OrderId = id,
+                    Status = r.Status,
+                    PushedCount = r.PushedCount,
+                    FailedCount = r.FailedCount,
+                    ErrorMessage = r.ErrorMessage
+                });
+            }
+            catch (Exception ex)
+            {
+                results.Add(new BatchPushItemResultDto
+                {
+                    OrderId = id,
+                    Status = "Failed",
+                    ErrorMessage = ex.Message
+                });
+            }
+        }
+
+        return new BatchPushResultDto
+        {
+            Total = results.Count,
+            SuccessCount = results.Count(r => r.Status is "Success" or "Partial"),
+            FailedCount = results.Count(r => r.Status == "Failed"),
+            Results = results
         };
     }
 
