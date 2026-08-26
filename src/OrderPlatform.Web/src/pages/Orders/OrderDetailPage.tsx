@@ -1,6 +1,7 @@
 // 订单详情页：展示订单头信息与明细行（规格/长度/收口/材质拆分列、物料同步状态、行级推送状态），
 // 支持整单/单行物料同步、行级推送（部分关联订单可推送已匹配行），推送后展示结果与 ERP 报文。
 import { useCallback, useEffect, useState } from 'react';
+import type { SyntheticEvent } from 'react';
 import {
   App,
   Button,
@@ -20,7 +21,9 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router';
+import type { ResizeCallbackData } from 'react-resizable';
 import { orderApi } from '../../api/order';
+import ResizableTitle from '../../components/ResizableTitle';
 import type {
   ErpApiCall,
   ItemPushStatus,
@@ -77,6 +80,30 @@ function itemPushTag(status: ItemPushStatus) {
   const item = map[status] ?? { color: 'default', text: status };
   return <Tag color={item.color}>{item.text}</Tag>;
 }
+
+// 明细表列默认宽度（行备注 230 = 原 180 + 50）
+const columnDefaults: Record<string, number> = {
+  lineNo: 55,
+  materialCode: 170,
+  spec: 170,
+  length: 80,
+  shouKou: 70,
+  material: 80,
+  customerPartNo: 120,
+  nestPartNo: 110,
+  remark: 230,
+  quantity: 90,
+  amount: 100,
+  matchStatus: 90,
+  materialSync: 150,
+  itemPushStatus: 85,
+};
+
+// 各列最小宽度（拖拽下限）：窄列放宽下限，避免误触
+const columnMinWidths: Record<string, number> = {
+  lineNo: 40,
+  shouKou: 50,
+};
 
 /** ERP 报文格式化：JSON 则美化缩进，否则原文展示。 */
 function formatPayload(text: string): string {
@@ -178,6 +205,8 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  // 列宽拖拽覆盖值（仅本次会话，刷新后恢复默认）
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
 
   // 加载订单详情
   const load = useCallback(async () => {
@@ -246,38 +275,123 @@ export default function OrderDetailPage() {
     }
   };
 
+  const widthOf = (key: string) => columnWidths[key] ?? columnDefaults[key];
+
+  const minWidthOf = (key: string) => columnMinWidths[key] ?? 60;
+
+  // 表头拖拽回调：更新对应列宽（不小于最小宽度）；仅存于 state，刷新页面即恢复默认
+  const handleResize =
+    (key: string) =>
+    (_: SyntheticEvent, { size }: ResizeCallbackData) => {
+      setColumnWidths((prev) => ({ ...prev, [key]: Math.max(Math.round(size.width), minWidthOf(key)) }));
+    };
+
+  // 明细表每列均支持拖拽调宽：width 取「拖拽覆盖值 ?? 默认宽度」，onHeaderCell 注入拖拽回调
   const columns = [
-    { title: '行号', dataIndex: 'lineNo', key: 'lineNo', width: 55 },
-    { title: '物料编码', dataIndex: 'materialCode', key: 'materialCode', width: 170 },
-    { title: '规格', dataIndex: 'spec', key: 'spec', width: 170, ellipsis: true },
+    {
+      title: '行号',
+      dataIndex: 'lineNo',
+      key: 'lineNo',
+      width: widthOf('lineNo'),
+      onHeaderCell: () => ({
+        width: widthOf('lineNo'),
+        minWidth: minWidthOf('lineNo'),
+        onResize: handleResize('lineNo'),
+      }),
+    },
+    {
+      title: '物料编码',
+      dataIndex: 'materialCode',
+      key: 'materialCode',
+      width: widthOf('materialCode'),
+      onHeaderCell: () => ({
+        width: widthOf('materialCode'),
+        minWidth: minWidthOf('materialCode'),
+        onResize: handleResize('materialCode'),
+      }),
+    },
+    {
+      title: '规格',
+      dataIndex: 'spec',
+      key: 'spec',
+      width: widthOf('spec'),
+      onHeaderCell: () => ({
+        width: widthOf('spec'),
+        minWidth: minWidthOf('spec'),
+        onResize: handleResize('spec'),
+      }),
+      ellipsis: true,
+    },
     {
       title: '长度',
       dataIndex: 'length',
       key: 'length',
-      width: 80,
+      width: widthOf('length'),
+      onHeaderCell: () => ({
+        width: widthOf('length'),
+        minWidth: minWidthOf('length'),
+        onResize: handleResize('length'),
+      }),
       render: (value: number | null) => (value === null ? '-' : value),
     },
     {
       title: '收口',
       dataIndex: 'shouKou',
       key: 'shouKou',
-      width: 70,
+      width: widthOf('shouKou'),
+      onHeaderCell: () => ({
+        width: widthOf('shouKou'),
+        minWidth: minWidthOf('shouKou'),
+        onResize: handleResize('shouKou'),
+      }),
       render: (value: string) => value || '-',
     },
     {
       title: '材质',
       dataIndex: 'material',
       key: 'material',
-      width: 80,
+      width: widthOf('material'),
+      onHeaderCell: () => ({
+        width: widthOf('material'),
+        minWidth: minWidthOf('material'),
+        onResize: handleResize('material'),
+      }),
       render: (value: string) => value || '-',
     },
-    { title: '客户图号', dataIndex: 'customerPartNo', key: 'customerPartNo', width: 120, ellipsis: true },
-    { title: '套图图号', dataIndex: 'nestPartNo', key: 'nestPartNo', width: 110, ellipsis: true },
+    {
+      title: '客户图号',
+      dataIndex: 'customerPartNo',
+      key: 'customerPartNo',
+      width: widthOf('customerPartNo'),
+      onHeaderCell: () => ({
+        width: widthOf('customerPartNo'),
+        minWidth: minWidthOf('customerPartNo'),
+        onResize: handleResize('customerPartNo'),
+      }),
+      ellipsis: true,
+    },
+    {
+      title: '套图图号',
+      dataIndex: 'nestPartNo',
+      key: 'nestPartNo',
+      width: widthOf('nestPartNo'),
+      onHeaderCell: () => ({
+        width: widthOf('nestPartNo'),
+        minWidth: minWidthOf('nestPartNo'),
+        onResize: handleResize('nestPartNo'),
+      }),
+      ellipsis: true,
+    },
     {
       title: '行备注',
       dataIndex: 'remark',
       key: 'remark',
-      width: 180,
+      width: widthOf('remark'),
+      onHeaderCell: () => ({
+        width: widthOf('remark'),
+        minWidth: minWidthOf('remark'),
+        onResize: handleResize('remark'),
+      }),
       ellipsis: true,
       render: (value: string) =>
         value ? (
@@ -292,27 +406,47 @@ export default function OrderDetailPage() {
       title: '数量',
       dataIndex: 'quantity',
       key: 'quantity',
-      width: 90,
+      width: widthOf('quantity'),
+      onHeaderCell: () => ({
+        width: widthOf('quantity'),
+        minWidth: minWidthOf('quantity'),
+        onResize: handleResize('quantity'),
+      }),
       render: (value: number) => value.toLocaleString('zh-CN'),
     },
     {
       title: '金额（元）',
       dataIndex: 'amount',
       key: 'amount',
-      width: 100,
+      width: widthOf('amount'),
+      onHeaderCell: () => ({
+        width: widthOf('amount'),
+        minWidth: minWidthOf('amount'),
+        onResize: handleResize('amount'),
+      }),
       render: (value: number) => value.toLocaleString('zh-CN', { minimumFractionDigits: 2 }),
     },
     {
       title: '关联状态',
       dataIndex: 'matchStatus',
       key: 'matchStatus',
-      width: 90,
+      width: widthOf('matchStatus'),
+      onHeaderCell: () => ({
+        width: widthOf('matchStatus'),
+        minWidth: minWidthOf('matchStatus'),
+        onResize: handleResize('matchStatus'),
+      }),
       render: (value: MatchStatus) => matchStatusTag(value),
     },
     {
       title: '物料同步',
       key: 'materialSync',
-      width: 150,
+      width: widthOf('materialSync'),
+      onHeaderCell: () => ({
+        width: widthOf('materialSync'),
+        minWidth: minWidthOf('materialSync'),
+        onResize: handleResize('materialSync'),
+      }),
       render: (_: unknown, record: OrderItemDto) =>
         record.matchStatus === 'Matched' ? (
           <Space size={4}>
@@ -331,7 +465,12 @@ export default function OrderDetailPage() {
       title: '行推送',
       dataIndex: 'itemPushStatus',
       key: 'itemPushStatus',
-      width: 85,
+      width: widthOf('itemPushStatus'),
+      onHeaderCell: () => ({
+        width: widthOf('itemPushStatus'),
+        minWidth: minWidthOf('itemPushStatus'),
+        onResize: handleResize('itemPushStatus'),
+      }),
       render: (value: ItemPushStatus) => itemPushTag(value),
     },
   ];
@@ -412,7 +551,8 @@ export default function OrderDetailPage() {
           loading={loading}
           pagination={false}
           size="small"
-          scroll={{ x: 1700 }}
+          components={{ header: { cell: ResizableTitle } }}
+          scroll={{ x: columns.reduce((sum, col) => sum + ((col.width as number) ?? 0), 0) }}
         />
       </Card>
 

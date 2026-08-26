@@ -1,16 +1,14 @@
 // 订单列表页：支持关键词、客户、关联状态、推送状态筛选；
 // 可查看详情、推送订单（推送后弹窗展示结果与 ERP 报文），管理员可删除未推送订单。
 import { useCallback, useEffect, useState } from 'react';
-import type { Key, SyntheticEvent } from 'react';
+import type { Key } from 'react';
 import { App, Button, Card, Descriptions, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { DeleteOutlined, ReloadOutlined, SearchOutlined, SendOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router';
 import dayjs from 'dayjs';
-import type { ResizeCallbackData } from 'react-resizable';
 import { orderApi } from '../../api/order';
 import { uploadApi } from '../../api/upload';
 import { useAuthStore } from '../../store/authStore';
-import ResizableTitle from '../../components/ResizableTitle';
 import type {
   BatchPushItemResult,
   BatchPushResult,
@@ -36,25 +34,6 @@ const pushStatusOptions = [
   { value: 'Pushed', label: '已推送' },
   { value: 'Failed', label: '推送失败' },
 ];
-
-// 列默认宽度（订单号原无固定宽度，补默认值以支持拖拽）
-const columnDefaults: Record<string, number> = {
-  orderNo: 180,
-  customerName: 140,
-  orderDate: 120,
-  totalQuantity: 120,
-  totalAmount: 140,
-  parseStatus: 100,
-  pushStatus: 100,
-  createdAt: 160,
-  action: 150,
-};
-
-// 各列最小宽度（拖拽下限）：操作列需容纳按钮，订单号不宜过窄
-const columnMinWidths: Record<string, number> = {
-  orderNo: 120,
-  action: 150,
-};
 
 function matchStatusTag(status: MatchStatus) {
   const map: Record<string, { color: string; text: string }> = {
@@ -106,8 +85,6 @@ export default function OrderListPage() {
   const [customers, setCustomers] = useState<CustomerImportDto[]>([]);
   // 正在推送的订单 ID（按钮 loading 反馈，避免「点了没反应」）
   const [pushingId, setPushingId] = useState<string | null>(null);
-  // 列宽拖拽覆盖值（仅本次会话，刷新后恢复默认）
-  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   // 勾选的行（批量推送用；已推送订单不可选）
   const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);
   // 批量推送进行中
@@ -331,125 +308,62 @@ export default function OrderListPage() {
     });
   };
 
-  const widthOf = (key: string) => columnWidths[key] ?? columnDefaults[key];
-
-  const minWidthOf = (key: string) => columnMinWidths[key] ?? 60;
-
-  // 表头拖拽回调：更新对应列宽（不小于最小宽度）；仅存于 state，刷新页面即恢复默认
-  const handleResize =
-    (key: string) =>
-    (_: SyntheticEvent, { size }: ResizeCallbackData) => {
-      setColumnWidths((prev) => ({ ...prev, [key]: Math.max(Math.round(size.width), minWidthOf(key)) }));
-    };
-
-  // 每列均支持拖拽调宽：width 取「拖拽覆盖值 ?? 默认宽度」，onHeaderCell 注入拖拽回调
   const columns = [
     {
       title: '订单号',
       dataIndex: 'orderNo',
       key: 'orderNo',
-      width: widthOf('orderNo'),
-      onHeaderCell: () => ({
-        width: widthOf('orderNo'),
-        minWidth: minWidthOf('orderNo'),
-        onResize: handleResize('orderNo'),
-      }),
       render: (value: string, record: OrderListDto) => (
         <a onClick={() => navigate(`/orders/${record.id}`)}>{value}</a>
       ),
     },
-    {
-      title: '客户',
-      dataIndex: 'customerName',
-      key: 'customerName',
-      width: widthOf('customerName'),
-      onHeaderCell: () => ({
-        width: widthOf('customerName'),
-        minWidth: minWidthOf('customerName'),
-        onResize: handleResize('customerName'),
-      }),
-    },
+    { title: '客户', dataIndex: 'customerName', key: 'customerName', width: 140 },
     {
       title: '订单日期',
       dataIndex: 'orderDate',
       key: 'orderDate',
-      width: widthOf('orderDate'),
-      onHeaderCell: () => ({
-        width: widthOf('orderDate'),
-        minWidth: minWidthOf('orderDate'),
-        onResize: handleResize('orderDate'),
-      }),
+      width: 120,
       render: (value: string | null) => (value ? dayjs(value).format('YYYY-MM-DD') : '-'),
     },
     {
       title: '总数量',
       dataIndex: 'totalQuantity',
       key: 'totalQuantity',
-      width: widthOf('totalQuantity'),
-      onHeaderCell: () => ({
-        width: widthOf('totalQuantity'),
-        minWidth: minWidthOf('totalQuantity'),
-        onResize: handleResize('totalQuantity'),
-      }),
+      width: 120,
       render: (value: number) => value.toLocaleString('zh-CN'),
     },
     {
       title: '总金额（元）',
       dataIndex: 'totalAmount',
       key: 'totalAmount',
-      width: widthOf('totalAmount'),
-      onHeaderCell: () => ({
-        width: widthOf('totalAmount'),
-        minWidth: minWidthOf('totalAmount'),
-        onResize: handleResize('totalAmount'),
-      }),
+      width: 140,
       render: (value: number) => value.toLocaleString('zh-CN', { minimumFractionDigits: 2 }),
     },
     {
       title: '关联状态',
       dataIndex: 'parseStatus',
       key: 'parseStatus',
-      width: widthOf('parseStatus'),
-      onHeaderCell: () => ({
-        width: widthOf('parseStatus'),
-        minWidth: minWidthOf('parseStatus'),
-        onResize: handleResize('parseStatus'),
-      }),
+      width: 100,
       render: (value: MatchStatus) => matchStatusTag(value),
     },
     {
       title: '推送状态',
       dataIndex: 'pushStatus',
       key: 'pushStatus',
-      width: widthOf('pushStatus'),
-      onHeaderCell: () => ({
-        width: widthOf('pushStatus'),
-        minWidth: minWidthOf('pushStatus'),
-        onResize: handleResize('pushStatus'),
-      }),
+      width: 100,
       render: (value: PushStatus) => pushStatusTag(value),
     },
     {
       title: '创建时间',
       dataIndex: 'createdAt',
       key: 'createdAt',
-      width: widthOf('createdAt'),
-      onHeaderCell: () => ({
-        width: widthOf('createdAt'),
-        minWidth: minWidthOf('createdAt'),
-        onResize: handleResize('createdAt'),
-      }),
+      width: 160,
       render: (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm'),
     },
     {
       title: '操作',
       key: 'action',
-      width: widthOf('action'),
-      onHeaderCell: () => ({
-        width: widthOf('action'),
-        minWidth: minWidthOf('action'),
-        onResize: handleResize('action'),
-      }),
+      width: 150,
       render: (_: unknown, record: OrderListDto) => (
         <Space>
           <Button type="link" size="small" onClick={() => navigate(`/orders/${record.id}`)}>
@@ -566,13 +480,11 @@ export default function OrderListPage() {
         columns={columns}
         dataSource={data}
         loading={loading}
-        components={{ header: { cell: ResizableTitle } }}
         rowSelection={{
           selectedRowKeys,
           onChange: (keys) => setSelectedRowKeys(keys),
           getCheckboxProps: (record) => ({ disabled: record.pushStatus === 'Pushed' }),
         }}
-        scroll={{ x: columns.reduce((sum, col) => sum + (col.width as number), 0) }}
         pagination={{
           current: page,
           pageSize,
