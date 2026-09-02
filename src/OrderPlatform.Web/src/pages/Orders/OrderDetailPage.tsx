@@ -98,6 +98,7 @@ const columnDefaults: Record<string, number> = {
   matchStatus: 90,
   materialSync: 150,
   itemPushStatus: 85,
+  itemErpOsNo: 130,
 };
 
 // 各列最小宽度（拖拽下限）：窄列放宽下限，避免误触
@@ -530,6 +531,19 @@ export default function OrderDetailPage() {
         ) : (
           '-'
         ),
+    },
+    {
+      title: 'ERP受单号',
+      dataIndex: 'erpOsNo',
+      key: 'itemErpOsNo',
+      width: widthOf('itemErpOsNo'),
+      onHeaderCell: () => ({
+        width: widthOf('itemErpOsNo'),
+        minWidth: minWidthOf('itemErpOsNo'),
+        onResize: handleResize('itemErpOsNo'),
+      }),
+      ellipsis: true,
+      render: (value: string) => value || '-',
     },
     {
       title: '行推送',

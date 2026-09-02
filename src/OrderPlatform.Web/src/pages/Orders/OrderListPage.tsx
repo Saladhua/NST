@@ -354,21 +354,6 @@ export default function OrderListPage() {
       render: (value: PushStatus) => pushStatusTag(value),
     },
     {
-      title: 'ERP受订单号',
-      dataIndex: 'erpOsNo',
-      key: 'erpOsNo',
-      width: 200,
-      ellipsis: true,
-      render: (value: string | null) =>
-        value ? (
-          <Tooltip title={value}>
-            <span>{value}</span>
-          </Tooltip>
-        ) : (
-          '-'
-        ),
-    },
-    {
       title: '创建时间',
       dataIndex: 'createdAt',
       key: 'createdAt',
