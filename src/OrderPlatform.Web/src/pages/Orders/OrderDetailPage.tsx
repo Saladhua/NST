@@ -1,7 +1,7 @@
 // 订单详情页：展示订单头信息与明细行（规格/长度/收口/材质拆分列、物料同步状态、行级推送状态），
 // 支持整单/单行物料同步、行级推送（部分关联订单可推送已匹配行），推送后展示结果与 ERP 报文。
 import { useCallback, useEffect, useState } from 'react';
-import type { SyntheticEvent } from 'react';
+import type { Key, SyntheticEvent } from 'react';
 import {
   App,
   Button,
@@ -206,6 +206,8 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  // 勾选推送的明细行 ID（仅未推送且已匹配的行可勾选）
+  const [selectedItemIds, setSelectedItemIds] = useState<Key[]>([]);
   // 列宽拖拽覆盖值（仅本次会话，刷新后恢复默认）
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
 
@@ -228,14 +230,19 @@ export default function OrderDetailPage() {
     void load();
   }, [load]);
 
-  // 推送当前订单（行级：只推未推送且已匹配的行），完成后弹窗展示结果与 ERP 报文
+  // 推送勾选的明细行（行级：只推未推送且已匹配的行），完成后弹窗展示结果与 ERP 报文
   const pushOrder = async () => {
     if (!id) {
       return;
     }
+    if (selectedItemIds.length === 0) {
+      message.warning('请先勾选要推送的明细行');
+      return;
+    }
     setPushing(true);
     try {
-      const result = await orderApi.push(id);
+      const result = await orderApi.push(id, selectedItemIds as string[]);
+      setSelectedItemIds([]);
       pushResult.show(result);
       await load();
     } catch {
@@ -576,7 +583,11 @@ export default function OrderDetailPage() {
               loading={pushing}
               onClick={() => void pushOrder()}
             >
-              {detail?.pushStatus === 'Pushed' ? '已推送' : '推送'}
+              {detail?.pushStatus === 'Pushed'
+                ? '已推送'
+                : selectedItemIds.length > 0
+                  ? `推送勾选行（${selectedItemIds.length}）`
+                  : '推送'}
             </Button>
           </Space>
         }
@@ -607,7 +618,14 @@ export default function OrderDetailPage() {
         )}
       </Card>
 
-      <Card title="订单明细">
+      <Card
+        title="订单明细"
+        extra={
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            勾选未推送的明细行后点击「推送」；已推送行不可勾选
+          </Typography.Text>
+        }
+      >
         <Table<OrderItemDto>
           rowKey="id"
           columns={columns}
@@ -615,6 +633,13 @@ export default function OrderDetailPage() {
           loading={loading}
           pagination={false}
           size="small"
+          rowSelection={{
+            selectedRowKeys: selectedItemIds,
+            onChange: (keys) => setSelectedItemIds(keys),
+            getCheckboxProps: (record) => ({
+              disabled: record.matchStatus !== 'Matched' || record.itemPushStatus === 'Pushed',
+            }),
+          }}
           components={{ header: { cell: ResizableTitle } }}
           scroll={{ x: columns.reduce((sum, col) => sum + ((col.width as number) ?? 0), 0) }}
         />

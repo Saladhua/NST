@@ -55,6 +55,11 @@ public interface IOrderRepository
         IEnumerable<Guid> customerIds,
         CancellationToken cancellationToken);
 
+    /// <summary>按订单批量取明细行已回填的 ERP 受订单号（同一订单多个受单号以逗号拼接去重）。</summary>
+    Task<Dictionary<Guid, string>> GetItemErpOsNosByOrderIdsAsync(
+        IEnumerable<Guid> orderIds,
+        CancellationToken cancellationToken);
+
     /// <summary>保存变更。</summary>
     Task SaveChangesAsync(CancellationToken cancellationToken);
 }

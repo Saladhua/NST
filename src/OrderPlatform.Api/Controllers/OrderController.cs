@@ -51,11 +51,11 @@ public class OrderController : ControllerBase
         return OrderPlatform.Shared.Api.ApiResponse<OrderDetailDto>.Ok(result);
     }
 
-    /// <summary>推送订单（行级：只推未推送且已匹配的行）。无论成败均返回详细结果与 ERP 报文，由前端按 Status 展示。</summary>
+    /// <summary>推送订单（行级：只推未推送且已匹配的行；传 ItemIds 时仅推勾选的明细行）。无论成败均返回详细结果与 ERP 报文，由前端按 Status 展示。</summary>
     [HttpPost("push")]
     public async Task<OrderPlatform.Shared.Api.ApiResponse<PushResultDto>> Push(PushOrderRequest request, CancellationToken cancellationToken)
     {
-        var result = await _orderService.PushAsync(request.OrderId, cancellationToken);
+        var result = await _orderService.PushAsync(request.OrderId, request.ItemIds, cancellationToken);
         var message = result.Status switch
         {
             "Success" => $"推送成功，共 {result.PushedCount} 行",
@@ -97,6 +97,9 @@ public class PushOrderRequest
 {
     /// <summary>订单 ID。</summary>
     public Guid OrderId { get; set; }
+
+    /// <summary>勾选推送的明细行 ID 列表（为空时推送全部可推行，兼容批量推送/整单推送）。</summary>
+    public List<Guid>? ItemIds { get; set; }
 }
 
 /// <summary>批量推送订单请求。</summary>

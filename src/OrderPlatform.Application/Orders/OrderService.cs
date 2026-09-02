@@ -19,8 +19,8 @@ public interface IOrderService
     /// <summary>查询订单详情（含明细，按行号排序）。</summary>
     Task<OrderDetailDto> GetDetailAsync(Guid id, CancellationToken cancellationToken);
 
-    /// <summary>推送订单（行级：只推未推送且已匹配的行，已推送行自动跳过）。无论成败均返回详细结果与 ERP 报文。</summary>
-    Task<PushResultDto> PushAsync(Guid orderId, CancellationToken cancellationToken);
+    /// <summary>推送订单（行级：只推未推送且已匹配的行，itemIds 非空时仅推勾选的行）。已推送行自动跳过。无论成败均返回详细结果与 ERP 报文。</summary>
+    Task<PushResultDto> PushAsync(Guid orderId, ICollection<Guid>? itemIds, CancellationToken cancellationToken);
 
     /// <summary>批量推送订单：逐单复用推送逻辑，单笔异常记为失败且不中断其余订单。</summary>
     Task<BatchPushResultDto> BatchPushAsync(IEnumerable<Guid> orderIds, CancellationToken cancellationToken);
@@ -76,6 +76,10 @@ public class OrderService : IOrderService
         var customers = await _customerRepository.ListAsync(cancellationToken);
         var customerMap = customers.ToDictionary(c => c.Id, c => c.Name);
 
+        // 受单号优先取明细行已回填值（同一订单部分推送多次会有多个受单号，逗号拼接），无明细值时回退订单表头号
+        var orderIds = items.Select(o => o.Id).ToList();
+        var itemOsNoMap = await _orderRepository.GetItemErpOsNosByOrderIdsAsync(orderIds, cancellationToken);
+
         var list = items.Select(o => new OrderListDto
         {
             Id = o.Id,
@@ -87,7 +91,7 @@ public class OrderService : IOrderService
             TotalAmount = o.TotalAmount,
             ParseStatus = o.ParseStatus,
             PushStatus = o.PushStatus,
-            ErpOsNo = o.ErpOsNo,
+            ErpOsNo = itemOsNoMap.TryGetValue(o.Id, out var itemOsNo) && itemOsNo.Length > 0 ? itemOsNo : o.ErpOsNo,
             CreatedAt = o.CreatedAt
         }).ToList();
 
@@ -143,7 +147,8 @@ public class OrderService : IOrderService
                 MatchStatus = i.MatchStatus,
                 ErpPrdNo = i.ErpPrdNo,
                 MaterialSyncStatus = i.MaterialSyncStatus,
-                ItemPushStatus = i.ItemPushStatus
+                ItemPushStatus = i.ItemPushStatus,
+                ErpOsNo = i.ErpOsNo
             }).ToList()
         };
 
@@ -151,10 +156,10 @@ public class OrderService : IOrderService
     }
 
     /// <summary>
-    /// 推送订单（行级）：只推送「未推送且已匹配图号」的明细行，已推送行自动跳过，
-    /// 未匹配行跳过（人工匹配后可再推）。全部行推送完成后订单标记已推送，不再允许推送。
+    /// 推送订单（行级）：只推送「未推送且已匹配图号」的明细行，勾选推送时（itemIds 非空）仅推勾选行，
+    /// 未勾选行跳过。已推送行自动跳过，全部行推送完成后订单标记已推送，不再允许推送。
     /// </summary>
-    public async Task<PushResultDto> PushAsync(Guid orderId, CancellationToken cancellationToken)
+    public async Task<PushResultDto> PushAsync(Guid orderId, ICollection<Guid>? itemIds, CancellationToken cancellationToken)
     {
         var order = await _orderRepository.GetByIdAsync(orderId, cancellationToken)
             ?? throw new BusinessException("订单不存在");
@@ -164,15 +169,18 @@ public class OrderService : IOrderService
             throw new BusinessException("订单已全部推送，请勿重复推送");
         }
 
-        // 待推送行：未推送（或推送失败可重试）且已匹配图号
+        // 待推送行：未推送（或推送失败可重试）且已匹配图号；勾选推送时仅取勾选的明细行
         var pendingItems = order.Items
             .Where(i => i.ItemPushStatus != ItemPushStatus.Pushed && i.MatchStatus == MatchStatus.Matched)
+            .Where(i => itemIds is null || itemIds.Contains(i.Id))
             .OrderBy(i => i.LineNo)
             .ToList();
 
         if (pendingItems.Count == 0)
         {
-            throw new BusinessException("没有可推送的明细行（未关联图号的行需先完成匹配）");
+            throw new BusinessException(itemIds is null
+                ? "没有可推送的明细行（未关联图号的行需先完成匹配）"
+                : "勾选的明细行均已推送或不可推送（需先关联图号）");
         }
 
         var customer = await _customerRepository.GetByIdAsync(order.CustomerId, cancellationToken);
@@ -206,8 +214,11 @@ public class OrderService : IOrderService
             }
 
             // 3. 逐行获取货品代号并生成受订单表身（单行失败不中断其余行）
+            //    ITM 项次从 1 开始连续编号（部分推送时每次生成新受订单表头，表身项次与订单行号无关）
+            var itm = 0;
             foreach (var item in pendingItems)
             {
+                itm++;
                 try
                 {
                     // 查询图号统一用 NEST 图号（与 ERP 侧图号体系一致），无 NEST 图号时回退客户图号
@@ -235,7 +246,7 @@ public class OrderService : IOrderService
                     await _erpPushService.CreateOrderItemAsync(new ErpOrderItemRequest
                     {
                         SoNo = osNo,
-                        Itm = item.LineNo,
+                        Itm = itm,
                         PrdNo = product.PrdNo,
                         Qty = pushQty,
                         Ydd = FormatYdd(item.ReceiveDate, DateTime.Now),
@@ -244,6 +255,7 @@ public class OrderService : IOrderService
                     }, cancellationToken);
 
                     item.ItemPushStatus = ItemPushStatus.Pushed;
+                    item.ErpOsNo = osNo;
                     item.PushedAt = DateTime.Now;
                     pushedCount++;
                     pushedItems.Add(new
@@ -353,7 +365,7 @@ public class OrderService : IOrderService
         {
             try
             {
-                var r = await PushAsync(id, cancellationToken);
+                var r = await PushAsync(id, null, cancellationToken);
                 results.Add(new BatchPushItemResultDto
                 {
                     OrderId = id,

@@ -357,9 +357,16 @@ export default function OrderListPage() {
       title: 'ERP受订单号',
       dataIndex: 'erpOsNo',
       key: 'erpOsNo',
-      width: 140,
+      width: 200,
       ellipsis: true,
-      render: (value: string | null) => value || '-',
+      render: (value: string | null) =>
+        value ? (
+          <Tooltip title={value}>
+            <span>{value}</span>
+          </Tooltip>
+        ) : (
+          '-'
+        ),
     },
     {
       title: '创建时间',

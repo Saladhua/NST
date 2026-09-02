@@ -142,6 +142,7 @@ public class OrderDbContext : DbContext
         item.Property(x => x.ErpPrdNo).HasMaxLength(100);
         item.Property(x => x.MaterialSyncStatus).HasConversion<string>().HasMaxLength(20);
         item.Property(x => x.ItemPushStatus).HasConversion<string>().HasMaxLength(20);
+        item.Property(x => x.ErpOsNo).HasMaxLength(50);
         item.HasIndex(x => x.OrderId);
 
         // 推送日志：按订单索引

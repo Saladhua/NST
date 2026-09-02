@@ -192,6 +192,30 @@ public class OrderRepository : IOrderRepository
             .ToDictionary(g => g.Key, g => g.Select(x => x.PartNo).Distinct().Count());
     }
 
+    /// <summary>按订单批量取明细行已回填的 ERP 受订单号（同一订单多个受单号去重后以英文逗号拼接）。</summary>
+    public async Task<Dictionary<Guid, string>> GetItemErpOsNosByOrderIdsAsync(
+        IEnumerable<Guid> orderIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = orderIds as ICollection<Guid> ?? orderIds.ToList();
+        if (ids.Count == 0)
+        {
+            return new Dictionary<Guid, string>();
+        }
+
+        var rows = await _dbContext.OrderItems
+            .AsNoTracking()
+            .Where(i => ids.Contains(i.OrderId) && i.ErpOsNo != null && i.ErpOsNo != "")
+            .Select(i => new { i.OrderId, i.ErpOsNo })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .GroupBy(x => x.OrderId)
+            .ToDictionary(
+                g => g.Key,
+                g => string.Join(",", g.Select(x => x.ErpOsNo!.Trim()).Distinct()));
+    }
+
     /// <summary>保存变更。</summary>
     public Task SaveChangesAsync(CancellationToken cancellationToken)
     {

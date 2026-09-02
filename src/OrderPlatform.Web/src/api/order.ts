@@ -37,9 +37,9 @@ export const orderApi = {
     }),
   // 订单详情（含明细）
   detail: (id: string) => http.get<OrderDetailDto>(`/order/detail/${id}`),
-  // 推送订单（行级：只推未推送且已匹配的行；ERP 调用多、耗时长，单独放宽超时到 120 秒）
-  push: (orderId: string) =>
-    http.post<PushResult>('/order/push', { orderId }, { timeout: 120000 }),
+  // 推送订单（行级：itemIds 为空推全部未推送且已匹配的行，传 itemIds 仅推勾选行；ERP 调用多、耗时长，单独放宽超时到 120 秒）
+  push: (orderId: string, itemIds?: string[]) =>
+    http.post<PushResult>('/order/push', { orderId, itemIds }, { timeout: 120000 }),
   // 批量推送（逐单推送、可能较慢，放宽超时到 10 分钟）
   batchPush: (orderIds: string[]) =>
     http.post<BatchPushResult>('/order/batch-push', { orderIds }, { timeout: 600000 }),

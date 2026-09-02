@@ -104,6 +104,8 @@ export interface OrderItemDto {
   erpPrdNo: string;
   materialSyncStatus: MaterialSyncStatus;
   itemPushStatus: ItemPushStatus;
+  /** ERP 受订单号（行推送成功后回填所在受订单号）。 */
+  erpOsNo: string;
 }
 
 /** 订单详情（列表项 + 来源批次 + 明细）。 */

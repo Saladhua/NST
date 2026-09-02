@@ -149,6 +149,9 @@ public class OrderItemDto
 
     /// <summary>行级推送状态。</summary>
     public ItemPushStatus ItemPushStatus { get; set; }
+
+    /// <summary>ERP 受订单号（行推送成功后回填所在受订单号）。</summary>
+    public string ErpOsNo { get; set; } = string.Empty;
 }
 
 /// <summary>物料同步请求。</summary>

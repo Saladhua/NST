@@ -86,6 +86,9 @@ public class OrderItem
     /// <summary>行级推送状态：NotPushed / Pushed / Failed。</summary>
     public ItemPushStatus ItemPushStatus { get; set; }
 
+    /// <summary>ERP 受订单号（行推送成功后回填所在受订单号，如 SO69020008）。</summary>
+    public string ErpOsNo { get; set; } = string.Empty;
+
     /// <summary>行推送时间。</summary>
     public DateTime? PushedAt { get; set; }
 
