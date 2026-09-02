@@ -92,6 +92,7 @@ const columnDefaults: Record<string, number> = {
   customerPartNo: 120,
   nestPartNo: 110,
   remark: 230,
+  receiveDate: 110,
   quantity: 90,
   amount: 100,
   matchStatus: 90,
@@ -252,7 +253,8 @@ export default function OrderDetailPage() {
     setSyncing(true);
     try {
       const result = await orderApi.syncMaterial(id);
-      message.success(`物料同步完成：成功 ${result.synced}，未找到 ${result.notFound}，失败 ${result.failed}`);
+      const createdText = result.created > 0 ? `，新建货品 ${result.created}` : '';
+      message.success(`物料同步完成：成功 ${result.synced}${createdText}，未找到 ${result.notFound}，失败 ${result.failed}`);
       await load();
     } catch {
       message.error('物料同步失败，请重试');
@@ -267,8 +269,8 @@ export default function OrderDetailPage() {
       return;
     }
     try {
-      await orderApi.syncMaterial(id, itemId);
-      message.success('物料同步完成');
+      const result = await orderApi.syncMaterial(id, itemId);
+      message.success(result.created > 0 ? '物料同步完成（已在 ERP 新建货品）' : '物料同步完成');
       await load();
     } catch {
       message.error('物料同步失败');
@@ -285,6 +287,29 @@ export default function OrderDetailPage() {
     (_: SyntheticEvent, { size }: ResizeCallbackData) => {
       setColumnWidths((prev) => ({ ...prev, [key]: Math.max(Math.round(size.width), minWidthOf(key)) }));
     };
+
+  // 客户差异化展示：三可客户图号 = 物料编码-收口；创达数量取行备注「XXX根」
+  const isSanke = detail?.customerName?.includes('三可') ?? false;
+  const isChuangda = detail?.customerName?.includes('创达') ?? false;
+
+  // 从行备注提取「XXX根」数量（创达）
+  const qtyFromRemark = (remark: string): number | null => {
+    const m = remark.match(/(\d+(?:\.\d+)?)\s*根/);
+    return m ? Number(m[1]) : null;
+  };
+
+  // 收口数值规范化：4.0 → 4、4.50 → 4.5；非数值文本原样返回
+  const normalizeShouKou = (value: string): string => {
+    const v = value?.trim() ?? '';
+    if (!v) {
+      return '-';
+    }
+    if (v === '不收口') {
+      return v;
+    }
+    const num = Number(v);
+    return Number.isFinite(num) ? String(num) : v;
+  };
 
   // 明细表每列均支持拖拽调宽：width 取「拖拽覆盖值 ?? 默认宽度」，onHeaderCell 注入拖拽回调
   const columns = [
@@ -311,6 +336,18 @@ export default function OrderDetailPage() {
       }),
     },
     {
+      title: '收口',
+      dataIndex: 'shouKou',
+      key: 'shouKou',
+      width: widthOf('shouKou'),
+      onHeaderCell: () => ({
+        width: widthOf('shouKou'),
+        minWidth: minWidthOf('shouKou'),
+        onResize: handleResize('shouKou'),
+      }),
+      render: (value: string) => normalizeShouKou(value),
+    },
+    {
       title: '规格',
       dataIndex: 'spec',
       key: 'spec',
@@ -335,18 +372,6 @@ export default function OrderDetailPage() {
       render: (value: number | null) => (value === null ? '-' : value),
     },
     {
-      title: '收口',
-      dataIndex: 'shouKou',
-      key: 'shouKou',
-      width: widthOf('shouKou'),
-      onHeaderCell: () => ({
-        width: widthOf('shouKou'),
-        minWidth: minWidthOf('shouKou'),
-        onResize: handleResize('shouKou'),
-      }),
-      render: (value: string) => value || '-',
-    },
-    {
       title: '材质',
       dataIndex: 'material',
       key: 'material',
@@ -369,9 +394,23 @@ export default function OrderDetailPage() {
         onResize: handleResize('customerPartNo'),
       }),
       ellipsis: true,
+      render: (_: unknown, record: OrderItemDto) => {
+        // 三可：客户图号 = 物料编码/收口值.0收口（如 JSJ0406437/4.0收口）
+        if (isSanke) {
+          const shouKou = normalizeShouKou(record.shouKou);
+          if (shouKou && shouKou !== '0' && shouKou !== '-') {
+            // 数值统一保留一位小数并固定「收口」后缀
+            const num = Number(shouKou);
+            const formatted = Number.isFinite(num) ? num.toFixed(1) : shouKou;
+            return `${record.materialCode}/${formatted}收口`;
+          }
+          return record.materialCode || '-';
+        }
+        return record.customerPartNo || '-';
+      },
     },
     {
-      title: '套图图号',
+      title: 'NEST图号',
       dataIndex: 'nestPartNo',
       key: 'nestPartNo',
       width: widthOf('nestPartNo'),
@@ -403,6 +442,22 @@ export default function OrderDetailPage() {
         ),
     },
     {
+      title: '交货日期',
+      dataIndex: 'receiveDate',
+      key: 'receiveDate',
+      width: widthOf('receiveDate'),
+      onHeaderCell: () => ({
+        width: widthOf('receiveDate'),
+        minWidth: minWidthOf('receiveDate'),
+        onResize: handleResize('receiveDate'),
+      }),
+      render: (_: unknown, record: OrderItemDto) => {
+        // 要货日期：优先 PDF/Excel 里的交货日期，没有则用推送日期（点击推送的日期）
+        const date = record.receiveDate ?? record.pushedAt;
+        return date ? date.slice(0, 10) : '-';
+      },
+    },
+    {
       title: '数量',
       dataIndex: 'quantity',
       key: 'quantity',
@@ -412,7 +467,15 @@ export default function OrderDetailPage() {
         minWidth: minWidthOf('quantity'),
         onResize: handleResize('quantity'),
       }),
-      render: (value: number) => value.toLocaleString('zh-CN'),
+      render: (_: unknown, record: OrderItemDto) => {
+        // 创达：数量取行备注「XXX根」，只显示数量不带单位
+        if (isChuangda) {
+          const qty = qtyFromRemark(record.remark) ?? record.quantity;
+          return qty.toLocaleString('zh-CN');
+        }
+        const unit = record.unit ? ` ${record.unit}` : '';
+        return `${record.quantity.toLocaleString('zh-CN')}${unit}`;
+      },
     },
     {
       title: '金额（元）',
@@ -534,6 +597,7 @@ export default function OrderDetailPage() {
             </Descriptions.Item>
             <Descriptions.Item label="关联状态">{matchStatusTag(detail.parseStatus)}</Descriptions.Item>
             <Descriptions.Item label="推送状态">{pushStatusTag(detail.pushStatus)}</Descriptions.Item>
+            <Descriptions.Item label="ERP受订单号">{detail.erpOsNo || '-'}</Descriptions.Item>
             <Descriptions.Item label="关联 / 推送行">
               <Typography.Text>
                 关联 {matchedCount} / {detail.items.length}，已推 {pushedCount} 行

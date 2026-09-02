@@ -20,10 +20,32 @@ Write-Host "stderr: $err"
 
 Push-Location $webDir
 try {
-    npm run dev 2>&1 | Tee-Object -FilePath $out
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "前端退出，代码：$LASTEXITCODE"
+    # 用 .NET 直接启动 npm 并重定向输出：文件按 UTF-8 写入，避免 PowerShell 管道按 GBK 转码导致乱码
+    # npm 在 Windows 上是 npm.cmd，必须经 cmd.exe 启动
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = (Join-Path $env:SystemRoot 'System32\cmd.exe')
+    $psi.Arguments = "/c npm run dev"
+    $psi.WorkingDirectory = $webDir
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+
+    $utf8 = New-Object System.Text.UTF8Encoding($true)
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    $proc.WaitForExit()
+    $outText = $outTask.GetAwaiter().GetResult()
+    $errText = $errTask.GetAwaiter().GetResult()
+
+    [System.IO.File]::AppendAllText($out, $outText, $utf8)
+    if ($errText) {
+        [System.IO.File]::AppendAllText($err, $errText, $utf8)
+        $host.UI.WriteErrorLine($errText)
     }
+    Write-Host "前端退出，代码：$($proc.ExitCode)"
 }
 finally {
     Pop-Location

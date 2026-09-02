@@ -354,6 +354,14 @@ export default function OrderListPage() {
       render: (value: PushStatus) => pushStatusTag(value),
     },
     {
+      title: 'ERP受订单号',
+      dataIndex: 'erpOsNo',
+      key: 'erpOsNo',
+      width: 140,
+      ellipsis: true,
+      render: (value: string | null) => value || '-',
+    },
+    {
       title: '创建时间',
       dataIndex: 'createdAt',
       key: 'createdAt',
@@ -432,7 +440,6 @@ export default function OrderListPage() {
           onChange={(value) => {
             setCustomerId(value);
             setPage(1);
-            void load();
           }}
           options={customers.map((c) => ({ value: c.customerId, label: c.customerName }))}
           style={{ width: 160 }}
@@ -444,7 +451,6 @@ export default function OrderListPage() {
           onChange={(value) => {
             setParseStatus(value as MatchStatus | undefined);
             setPage(1);
-            void load();
           }}
           options={parseStatusOptions}
           style={{ width: 140 }}
@@ -456,12 +462,11 @@ export default function OrderListPage() {
           onChange={(value) => {
             setPushStatus(value as PushStatus | undefined);
             setPage(1);
-            void load();
           }}
           options={pushStatusOptions}
           style={{ width: 140 }}
         />
-        <Button type="primary" onClick={() => setPage(1)}>
+        <Button type="primary" onClick={() => void load()}>
           查询
         </Button>
         <Button

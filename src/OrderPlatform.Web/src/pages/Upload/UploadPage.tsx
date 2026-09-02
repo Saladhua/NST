@@ -21,7 +21,6 @@ import { InboxOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { uploadApi } from '../../api/upload';
 import type {
-  CustomerImportDto,
   ExcelBatchDetailDto,
   OrderGeneratedDto,
   UploadBatchDto,
@@ -44,22 +43,13 @@ export default function UploadPage() {
   const [page, setPage] = useState(1);
   const [orders, setOrders] = useState<OrderGeneratedDto[] | null>(null);
   const [orderLoading, setOrderLoading] = useState(false);
-  const [customers, setCustomers] = useState<CustomerImportDto[]>([]);
   const [excelDetail, setExcelDetail] = useState<ExcelBatchDetailDto | null>(null);
   const [excelLoading, setExcelLoading] = useState(false);
   const pollTimerRef = useRef<number | null>(null);
   // 上传中同步锁：antd 拖入多文件时 onChange 会连续触发多次，state 异步更新读不到最新值，须用 ref 防重入
   const uploadingRef = useRef(false);
 
-  // 刷新客户图号统计（失败静默）
-  const refreshCustomers = useCallback(async () => {
-    try {
-      setCustomers(await uploadApi.customers());
-    } catch {
-      // 失败静默，不阻塞主流程
-    }
-  }, []);
-
+  // 刷新上传记录（失败静默）
   const loadBatches = useCallback(async (pageNum: number) => {
     try {
       const result = await uploadApi.batches(pageNum, PAGE_SIZE);
@@ -129,7 +119,6 @@ export default function UploadPage() {
       const result = await uploadApi.upload(files, ({ percent }) => setUploadPercent(percent));
       if (result.length === 0) {
         message.success('上传成功');
-        void refreshCustomers();
         void loadBatches(1);
         return;
       }
@@ -139,7 +128,6 @@ export default function UploadPage() {
       if (allFinished(result)) {
         await refreshBatches(ids);
         message.success('上传解析完成');
-        void refreshCustomers();
         return;
       }
 
@@ -151,7 +139,6 @@ export default function UploadPage() {
           stopPolling();
           const failed = updated.filter((b) => b.status === 'Failed');
           message.success(failed.length === 0 ? '上传解析完成' : `解析完成，${failed.length} 个文件失败`);
-          void refreshCustomers();
           void loadBatches(1);
         }
       }, POLL_INTERVAL);
@@ -179,8 +166,7 @@ export default function UploadPage() {
 
   useEffect(() => {
     void loadBatches(1);
-    void refreshCustomers();
-  }, [loadBatches, refreshCustomers]);
+  }, [loadBatches]);
 
   useEffect(() => stopPolling, []);
 
@@ -301,7 +287,7 @@ export default function UploadPage() {
       render: (v: string | null) => v || '-',
     },
     {
-      title: '套图图号',
+      title: 'NEST图号',
       dataIndex: 'nestPartNo',
       key: 'nestPartNo',
       render: (v: string | null) => v || '-',
@@ -312,16 +298,6 @@ export default function UploadPage() {
       key: 'matchStatus',
       width: 100,
       render: (v: string) => matchStatusTag(v),
-    },
-  ];
-
-  const customerColumns = [
-    { title: '客户名称', dataIndex: 'customerName', key: 'customerName' },
-    {
-      title: '图号数量',
-      dataIndex: 'partCount',
-      key: 'partCount',
-      width: 120,
     },
   ];
 
@@ -452,20 +428,6 @@ export default function UploadPage() {
           <Typography.Text type="secondary">该批次未查询到关联订单（历史批次可能未建立批次关联）。</Typography.Text>
         )}
       </Modal>
-
-      <Card
-        title="客户图号统计"
-        extra={<Typography.Text type="secondary">按订单明细匹配统计的去重图号数</Typography.Text>}
-      >
-        <Table<CustomerImportDto>
-          rowKey="customerId"
-          columns={customerColumns}
-          dataSource={customers}
-          pagination={false}
-          size="small"
-          locale={{ emptyText: '暂无匹配图号数据' }}
-        />
-      </Card>
     </div>
   );
 }

@@ -15,6 +15,8 @@ export interface MaterialSyncResult {
   orderId: string;
   total: number;
   synced: number;
+  // 其中通过 ERP 新建货品后同步成功的行数（含在 synced 内）
+  created: number;
   notFound: number;
   failed: number;
   errorMessage: string | null;

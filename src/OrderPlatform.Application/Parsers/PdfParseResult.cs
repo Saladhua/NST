@@ -25,6 +25,9 @@ public class PdfParseResult
 
     /// <summary>全部页面的原始文本（供人工核对）。</summary>
     public string RawText { get; set; } = string.Empty;
+
+    /// <summary>原始表格（Excel 订单专用：表头 + 明细行，供上传记录查看明细）。</summary>
+    public List<ExcelSheetData> Sheets { get; set; } = new();
 }
 
 /// <summary>PDF / Excel 订单明细行解析结果（统一行模型）。</summary>

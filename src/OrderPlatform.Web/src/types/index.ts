@@ -69,6 +69,8 @@ export interface OrderListDto {
   totalAmount: number;
   parseStatus: MatchStatus;
   pushStatus: PushStatus;
+  /** ERP 受订单号（推送成功后回填）。 */
+  erpOsNo: string | null;
   createdAt: string;
 }
 
@@ -94,6 +96,8 @@ export interface OrderItemDto {
   price: number;
   amount: number;
   receiveDate: string | null;
+  /** 行推送时间（无交货日期时作为要货日期展示）。 */
+  pushedAt: string | null;
   /** 行备注（创达订单号所在列）。 */
   remark: string;
   matchStatus: MatchStatus;

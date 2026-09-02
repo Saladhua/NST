@@ -111,6 +111,7 @@ public class OrderDbContext : DbContext
         order.Property(x => x.TotalAmount).HasColumnType("decimal(18,2)");
         order.Property(x => x.ParseStatus).HasConversion<string>().HasMaxLength(20);
         order.Property(x => x.PushStatus).HasConversion<string>().HasMaxLength(20);
+        order.Property(x => x.ErpOsNo).HasMaxLength(50);
         order.Property(x => x.PdfRawJson);
         order.HasIndex(x => x.CustomerId);
         order.HasIndex(x => x.SourceFileId);

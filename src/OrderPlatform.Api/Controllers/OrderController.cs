@@ -74,7 +74,7 @@ public class OrderController : ControllerBase
         return OrderPlatform.Shared.Api.ApiResponse<BatchPushResultDto>.Ok(result, message);
     }
 
-    /// <summary>物料同步：按 图号+长度 查询 ERP 货品代号（itemId 为空时同步整单已匹配行）。</summary>
+    /// <summary>物料同步：按 图号+长度 查询 ERP 货品代号，查不到时自动调 PRD_TB 新建货品（itemId 为空时同步整单已匹配行）。</summary>
     [HttpPost("sync-material")]
     public async Task<OrderPlatform.Shared.Api.ApiResponse<MaterialSyncResultDto>> SyncMaterial(SyncMaterialRequest request, CancellationToken cancellationToken)
     {

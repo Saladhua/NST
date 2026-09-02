@@ -38,10 +38,54 @@ public class ExcelOrderParser : IExcelOrderParser
                 continue;
             }
 
+            // 保存原始明细表（表头 + 明细行），供上传记录「查看数据」展示
+            result.Sheets.Add(ToSheetData(grid));
+
             ParseSheet(grid, result);
         }
 
         return result;
+    }
+
+    /// <summary>从原始网格提取「明细表头行 + 其后数据行」为通用表结构。</summary>
+    private static ExcelSheetData ToSheetData(ExcelGrid grid)
+    {
+        var data = new ExcelSheetData { SheetName = grid.SheetName };
+        var headerRow = ExcelReader.FindHeaderRow(grid, "存货编码");
+        if (headerRow < 0)
+        {
+            headerRow = ExcelReader.FindHeaderRow(grid, "料件编号");
+        }
+
+        if (headerRow < 0 || headerRow >= grid.Cells.Count)
+        {
+            return data;
+        }
+
+        var headers = grid.Cells[headerRow];
+        data.Headers = headers.Select(h => h.Trim()).ToList();
+        for (var r = headerRow + 1; r < grid.Cells.Count; r++)
+        {
+            var cells = grid.Cells[r];
+            var row = new Dictionary<string, string>();
+            var anyValue = false;
+            for (var c = 0; c < headers.Count && c < cells.Count; c++)
+            {
+                var value = cells[c].Trim();
+                row[headers[c].Trim()] = value;
+                if (value.Length > 0)
+                {
+                    anyValue = true;
+                }
+            }
+
+            if (anyValue)
+            {
+                data.Rows.Add(row);
+            }
+        }
+
+        return data;
     }
 
     /// <summary>解析单个订单 sheet。</summary>
@@ -68,7 +112,8 @@ public class ExcelOrderParser : IExcelOrderParser
         result.OrderDate ??= ParseDate(dateText);
 
         // 客户识别：表头区含公司名的单元格（采购方）
-        foreach (var keyword in new[] { "三可", "法拉达" })
+        // 注：法拉达客户现已更名为「发润达」（广东发润达汽车零部件有限公司），两者等价识别
+        foreach (var keyword in new[] { "三可", "发润达", "法拉达" })
         {
             var company = ExcelReader.FindCellContaining(grid, keyword);
             if (company.Length > 0)

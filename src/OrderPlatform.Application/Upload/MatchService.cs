@@ -119,7 +119,7 @@ public static partial class MatchService
             return CustomerStrategy.Huaruda;
         }
 
-        if (customerName.Contains("法拉达"))
+        if (customerName.Contains("发润达") || customerName.Contains("法拉达"))
         {
             return CustomerStrategy.Falada;
         }

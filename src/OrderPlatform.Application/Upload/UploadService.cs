@@ -60,6 +60,7 @@ public class UploadService : IUploadService
     private readonly IExcelOrderParser _excelOrderParser;
     private readonly IOcrOrderParser _ocrOrderParser;
     private readonly IUploadJobQueue _jobQueue;
+    private readonly IOrderService _orderService;
     private readonly ILogger<UploadService> _logger;
 
     public UploadService(
@@ -73,6 +74,7 @@ public class UploadService : IUploadService
         IExcelOrderParser excelOrderParser,
         IOcrOrderParser ocrOrderParser,
         IUploadJobQueue jobQueue,
+        IOrderService orderService,
         ILogger<UploadService> logger)
     {
         _env = env;
@@ -85,6 +87,7 @@ public class UploadService : IUploadService
         _excelOrderParser = excelOrderParser;
         _ocrOrderParser = ocrOrderParser;
         _jobQueue = jobQueue;
+        _orderService = orderService;
         _logger = logger;
     }
 
@@ -260,7 +263,7 @@ public class UploadService : IUploadService
                     NestPartNo = nest,
                     CustomerPartNo = customerPartNo,
                     Spray = Get(row, "喷锌") ?? string.Empty,
-                    Alloy = Get(row, "合金") ?? string.Empty,
+                    Alloy = Get(row, "材质") ?? Get(row, "合金") ?? string.Empty,
                     Spec = spec,
                     Length = ParseNullableDecimal(Get(row, "长度（mm)") ?? Get(row, "长度")),
                     ShouKou = Get(row, "收口") ?? string.Empty,
@@ -534,6 +537,7 @@ public class UploadService : IUploadService
 
         // 逐行解析明细并匹配客户图号
         var allMatched = true;
+        var isChuangda = IsChuangda(customer?.Name) || IsChuangda(strategyName);
         foreach (var row in rows)
         {
             var match = MatchService.Match(strategyName, row, parts);
@@ -543,11 +547,18 @@ public class UploadService : IUploadService
             }
 
             var spec = SpecParser.ParseOrderSpec(row.Spec);
-            var orderMaterial = MatchService.ExtractMaterial(row.Material);
-            if (orderMaterial.Length == 0)
-            {
-                orderMaterial = spec.Material;
-            }
+
+            // 材质取 Excel 客户资料匹配到的合金（AI 扫描资料），PDF 解析的材质不作为来源
+            var orderMaterial = match.Alloy;
+
+            // 创达数量以行备注「XXX根」为准（如「202608235A，1840根」→ 1840）
+            var quantity = isChuangda
+                ? ExtractQuantityFromRemark(row.Remark) ?? row.Quantity
+                : row.Quantity;
+
+            // 规格统一规范化：去括号内材质留孔型、「外径*壁厚-模数*长度」减号转乘号并丢长度
+            // （如创达 18*1.8-14*210 → 18*1.8*14；三可 25.4*2-13*1686*4 → 25.4*2*13）
+            var specText = SpecParser.NormalizeSpec(row.Spec);
 
             order.Items.Add(new OrderItem
             {
@@ -556,7 +567,7 @@ public class UploadService : IUploadService
                 LineNo = row.LineNo,
                 MaterialCode = row.MaterialCode,
                 MaterialName = row.MaterialName,
-                Spec = row.Spec,
+                Spec = specText,
                 OuterDiameter = spec.OuterDiameter,
                 WallThickness = spec.WallThickness,
                 Module = spec.Module,
@@ -567,7 +578,7 @@ public class UploadService : IUploadService
                 Alloy = match.Alloy,
                 Spray = match.Spray,
                 Length = spec.Length ?? match.Length,
-                Quantity = row.Quantity,
+                Quantity = quantity,
                 Unit = row.Unit,
                 Price = row.Price,
                 Amount = row.Amount,
@@ -606,6 +617,24 @@ public class UploadService : IUploadService
             {
                 batch.ErrorMessage = null;
             }
+
+            // 自动物料同步（异步后台任务内执行）：对已匹配行调 get_PRD（NEST 图号+长度）查询货品代号，
+            // ERP 中存在则回填规格并标记已同步，不存在则自动新建货品后复查。
+            // 失败不中断批次解析，仅记录日志（可在订单详情手动重新同步）。
+            if (order.Items.Any(i => i.MatchStatus == MatchStatus.Matched))
+            {
+                try
+                {
+                    var syncResult = await _orderService.SyncMaterialAsync(order.Id, null, cancellationToken);
+                    _logger.LogInformation(
+                        "订单 {OrderNo} 自动物料同步完成：共 {Total} 行，同步成功 {Synced} 行（新建 {Created}），未找到 {NotFound}，失败 {Failed}",
+                        order.OrderNo, syncResult.Total, syncResult.Synced, syncResult.Created, syncResult.NotFound, syncResult.Failed);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "订单 {OrderNo} 自动物料同步失败：{Message}", order.OrderNo, ex.Message);
+                }
+            }
         }
         else
         {
@@ -618,6 +647,18 @@ public class UploadService : IUploadService
     private static bool IsChuangda(string? name)
     {
         return !string.IsNullOrWhiteSpace(name) && name.Contains("创达");
+    }
+
+    /// <summary>从行备注提取「XXX根」数量（创达：如「202608032B，6410根」→ 6410）；无则返回 null。</summary>
+    private static decimal? ExtractQuantityFromRemark(string? remark)
+    {
+        if (string.IsNullOrWhiteSpace(remark))
+        {
+            return null;
+        }
+
+        var m = System.Text.RegularExpressions.Regex.Match(remark, @"(\d+(?:\.\d+)?)\s*根");
+        return m.Success && decimal.TryParse(m.Groups[1].Value, out var qty) ? qty : null;
     }
 
     /// <summary>按客户名识别客户：先精确匹配，再尝试包含匹配。</summary>
@@ -669,7 +710,7 @@ public class UploadService : IUploadService
         return new PagedResult<UploadBatchDto>(items, total);
     }
 
-    /// <summary>查看 Excel 批次解析明细（从 RawDataJson 反序列化）。</summary>
+    /// <summary>查看 Excel 批次解析明细（从 RawDataJson 反序列化，兼容客户资料与订单两类结构）。</summary>
     public async Task<ExcelBatchDetailDto> GetBatchExcelAsync(Guid batchId, CancellationToken cancellationToken)
     {
         var batch = await _batchRepository.GetByIdAsync(batchId, cancellationToken)
@@ -679,18 +720,66 @@ public class UploadService : IUploadService
             throw new BusinessException("该批次不是 Excel 文件或尚无解析数据");
         }
 
-        var result = JsonSerializer.Deserialize<ExcelParseResult>(batch.RawDataJson);
+        // 客户资料：{"Sheets":[{SheetName,Headers,Rows}]}；订单：PdfParseResult 结构含 Sheets
+        var sheets = new List<ExcelSheetDetailDto>();
+        var parsed = JsonSerializer.Deserialize<ExcelParseResult>(batch.RawDataJson);
+        if (parsed?.Sheets.Count > 0)
+        {
+            sheets.AddRange(parsed.Sheets.Select(s => new ExcelSheetDetailDto
+            {
+                SheetName = s.SheetName,
+                Headers = s.Headers,
+                Rows = s.Rows
+            }));
+        }
+        else
+        {
+            var order = JsonSerializer.Deserialize<PdfParseResult>(batch.RawDataJson);
+            if (order is null)
+            {
+                return new ExcelBatchDetailDto { BatchId = batch.Id, BatchNo = batch.BatchNo, FileName = batch.FileName };
+            }
+
+            if (order.Sheets is { Count: > 0 })
+            {
+                sheets.AddRange(order.Sheets.Select(s => new ExcelSheetDetailDto
+                {
+                    SheetName = s.SheetName,
+                    Headers = s.Headers,
+                    Rows = s.Rows
+                }));
+            }
+            else if (order.Rows.Count > 0)
+            {
+                // 历史批次（未保存原始表）：由解析行回退生成可读明细表
+                sheets.Add(new ExcelSheetDetailDto
+                {
+                    SheetName = order.BuyerName,
+                    Headers = new List<string> { "行号", "存货编码", "存货名称", "规格型号", "材质", "单位", "数量", "单价", "金额", "备注", "原始行" },
+                    Rows = order.Rows.Select(r => new Dictionary<string, string>
+                    {
+                        ["行号"] = r.LineNo.ToString(),
+                        ["存货编码"] = r.MaterialCode,
+                        ["存货名称"] = r.MaterialName,
+                        ["规格型号"] = r.Spec,
+                        ["材质"] = r.Material,
+                        ["单位"] = r.Unit,
+                        ["数量"] = r.Quantity.ToString(),
+                        ["单价"] = r.Price.ToString(),
+                        ["金额"] = r.Amount.ToString(),
+                        ["备注"] = r.Remark,
+                        ["原始行"] = r.Raw
+                    }).ToList()
+                });
+            }
+        }
+
         return new ExcelBatchDetailDto
         {
             BatchId = batch.Id,
             BatchNo = batch.BatchNo,
             FileName = batch.FileName,
-            Sheets = result?.Sheets.Select(s => new ExcelSheetDetailDto
-            {
-                SheetName = s.SheetName,
-                Headers = s.Headers,
-                Rows = s.Rows
-            }).ToList() ?? new List<ExcelSheetDetailDto>()
+            Sheets = sheets
         };
     }
 

@@ -52,6 +52,9 @@ public class OrderListDto
     /// <summary>推送状态。</summary>
     public PushStatus PushStatus { get; set; }
 
+    /// <summary>ERP 受订单号（推送成功后回填，如 SO69020008）。</summary>
+    public string? ErpOsNo { get; set; }
+
     /// <summary>创建时间。</summary>
     public DateTime CreatedAt { get; set; }
 }
@@ -129,6 +132,9 @@ public class OrderItemDto
     /// <summary>交货日期。</summary>
     public DateTime? ReceiveDate { get; set; }
 
+    /// <summary>行推送时间（无交货日期时作为要货日期展示）。</summary>
+    public DateTime? PushedAt { get; set; }
+
     /// <summary>行备注（创达订单号所在列）。</summary>
     public string Remark { get; set; } = string.Empty;
 
@@ -166,6 +172,9 @@ public class MaterialSyncResultDto
 
     /// <summary>同步成功（ERP 查到货品）行数。</summary>
     public int Synced { get; set; }
+
+    /// <summary>其中通过 PRD_TB 新建货品后同步成功的行数（含在 Synced 内）。</summary>
+    public int Created { get; set; }
 
     /// <summary>ERP 未找到行数。</summary>
     public int NotFound { get; set; }

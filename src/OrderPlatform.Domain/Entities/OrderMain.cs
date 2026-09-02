@@ -32,6 +32,9 @@ public class OrderMain
     /// <summary>推送状态：NotPushed / Pushed / Failed。</summary>
     public PushStatus PushStatus { get; set; }
 
+    /// <summary>ERP 受订单号（推送生成表头成功后回填，如 SO69020008）。</summary>
+    public string? ErpOsNo { get; set; }
+
     /// <summary>PDF 解析结果原始 JSON（供补匹配时重新使用）。</summary>
     public string? PdfRawJson { get; set; }
 

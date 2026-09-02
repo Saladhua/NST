@@ -459,6 +459,12 @@ public partial class OcrOrderParser : IOcrOrderParser
             return "三可";
         }
 
+        // 法拉达客户已更名「发润达」，两名称并存于客户库，按文件实际用名识别
+        if (text.Contains("发润达"))
+        {
+            return "发润达";
+        }
+
         if (text.Contains("法拉达"))
         {
             return "法拉达";

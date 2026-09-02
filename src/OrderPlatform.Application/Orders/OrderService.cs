@@ -1,5 +1,6 @@
 using AutoMapper;
 using Microsoft.Extensions.Logging;
+using OrderPlatform.Application.Parsers;
 using OrderPlatform.Application.Upload.Dtos;
 using OrderPlatform.Domain.Entities;
 using OrderPlatform.Domain.Enums;
@@ -24,7 +25,7 @@ public interface IOrderService
     /// <summary>批量推送订单：逐单复用推送逻辑，单笔异常记为失败且不中断其余订单。</summary>
     Task<BatchPushResultDto> BatchPushAsync(IEnumerable<Guid> orderIds, CancellationToken cancellationToken);
 
-    /// <summary>物料同步：按 图号+长度 调 ERP 查询货品代号并回填状态（单行或整单）。</summary>
+    /// <summary>物料同步：按 图号+长度 调 ERP 查询货品代号并回填状态（单行或整单）；查不到时调 PRD_TB 自动创建后复查。</summary>
     Task<MaterialSyncResultDto> SyncMaterialAsync(Guid orderId, Guid? itemId, CancellationToken cancellationToken);
 
     /// <summary>删除订单（已推送的订单不可删除）。</summary>
@@ -86,6 +87,7 @@ public class OrderService : IOrderService
             TotalAmount = o.TotalAmount,
             ParseStatus = o.ParseStatus,
             PushStatus = o.PushStatus,
+            ErpOsNo = o.ErpOsNo,
             CreatedAt = o.CreatedAt
         }).ToList();
 
@@ -111,6 +113,7 @@ public class OrderService : IOrderService
             TotalAmount = order.TotalAmount,
             ParseStatus = order.ParseStatus,
             PushStatus = order.PushStatus,
+            ErpOsNo = order.ErpOsNo,
             SourceFileId = order.SourceFileId,
             CreatedAt = order.CreatedAt,
             Items = order.Items.OrderBy(i => i.LineNo).Select(i => new OrderItemDto
@@ -135,6 +138,7 @@ public class OrderService : IOrderService
                 Price = i.Price,
                 Amount = i.Amount,
                 ReceiveDate = i.ReceiveDate,
+                PushedAt = i.PushedAt,
                 Remark = i.Remark,
                 MatchStatus = i.MatchStatus,
                 ErpPrdNo = i.ErpPrdNo,
@@ -206,25 +210,37 @@ public class OrderService : IOrderService
             {
                 try
                 {
+                    // 查询图号统一用 NEST 图号（与 ERP 侧图号体系一致），无 NEST 图号时回退客户图号
                     var product = await _erpPushService.GetProductAsync(
-                        item.CustomerPartNo.Length > 0 ? item.CustomerPartNo : item.NestPartNo,
+                        item.NestPartNo.Length > 0 ? item.NestPartNo : item.CustomerPartNo,
                         item.Length?.ToString("0.##") ?? string.Empty,
                         cancellationToken);
 
                     if (string.IsNullOrWhiteSpace(product.PrdNo))
                     {
-                        throw new InvalidOperationException($"ERP 接口 get_PRD 未匹配到货品代号（图号：{item.CustomerPartNo}）");
+                        throw new InvalidOperationException($"ERP 接口 get_PRD 未匹配到货品代号（图号：{item.CustomerPartNo}），请先执行物料同步（ERP 中不存在的货品将自动创建）");
                     }
 
                     item.ErpPrdNo = product.PrdNo;
+                    // 创达数量以行备注「XXX根」为准
+                    var pushQty = IsChuangda(customer.Name)
+                        ? ExtractQuantityFromRemark(item.Remark) ?? item.Quantity
+                        : item.Quantity;
+                    // 推送规格：统一规范化（去材质留孔型、减号结构转乘号丢长度）；三可客户图号拼接规则不变
+                    var pushSpec = SpecParser.NormalizeSpec(item.Spec);
+                    // 客户图号：三可为 物料编码-收口，其余用匹配到的客户图号；客户订单号即本平台订单号
+                    var khth = IsSanke(customer.Name)
+                        ? BuildSankeKhth(item.MaterialCode, item.ShouKou)
+                        : item.CustomerPartNo;
                     await _erpPushService.CreateOrderItemAsync(new ErpOrderItemRequest
                     {
                         SoNo = osNo,
                         Itm = item.LineNo,
                         PrdNo = product.PrdNo,
-                        Qty = item.Quantity,
-                        Qty1 = item.Quantity,
-                        Ydd = item.ReceiveDate?.ToString("yyyy-MM-dd") ?? string.Empty
+                        Qty = pushQty,
+                        Ydd = FormatYdd(item.ReceiveDate, DateTime.Now),
+                        Khth = khth,
+                        CusOs = order.OrderNo
                     }, cancellationToken);
 
                     item.ItemPushStatus = ItemPushStatus.Pushed;
@@ -234,9 +250,11 @@ public class OrderService : IOrderService
                     {
                         LineNo = item.LineNo,
                         PrdNo = product.PrdNo,
-                        Qty = item.Quantity,
-                        Qty1 = item.Quantity,
-                        Ydd = item.ReceiveDate?.ToString("yyyy-MM-dd") ?? string.Empty
+                        Qty = pushQty,
+                        Ydd = FormatYdd(item.ReceiveDate, DateTime.Now),
+                        Spec = pushSpec,
+                        Khth = khth,
+                        CusOs = order.OrderNo
                     });
                 }
                 catch (Exception ex)
@@ -262,6 +280,12 @@ public class OrderService : IOrderService
         var allPushed = order.Items.Count > 0 && order.Items.All(i => i.ItemPushStatus == ItemPushStatus.Pushed);
         var anyPushed = order.Items.Any(i => i.ItemPushStatus == ItemPushStatus.Pushed);
         order.PushStatus = allPushed ? PushStatus.Pushed : anyPushed ? PushStatus.PartialPushed : PushStatus.Failed;
+        // 回填 ERP 受订单号（表头生成成功即有值；未取得时保留原值）
+        if (!string.IsNullOrWhiteSpace(osNo))
+        {
+            order.ErpOsNo = osNo;
+        }
+
         _orderRepository.Update(order);
         await _orderRepository.SaveChangesAsync(cancellationToken);
 
@@ -361,12 +385,15 @@ public class OrderService : IOrderService
 
     /// <summary>
     /// 物料同步：按 图号 + 长度 调 ERP 查询货品代号，回填 ErpPrdNo 与同步状态。
-    /// itemId 为空时同步订单内全部已匹配行。创建物料接口第三方暂未提供，查不到标记 NotFound。
+    /// itemId 为空时同步订单内全部已匹配行。ERP 查不到时调 PRD_TB 新建货品后复查，复查到即回填。
     /// </summary>
     public async Task<MaterialSyncResultDto> SyncMaterialAsync(Guid orderId, Guid? itemId, CancellationToken cancellationToken)
     {
         var order = await _orderRepository.GetByIdAsync(orderId, cancellationToken)
             ?? throw new BusinessException("订单不存在");
+
+        var customer = await _customerRepository.GetByIdAsync(order.CustomerId, cancellationToken);
+        var customerName = customer?.Name ?? string.Empty;
 
         var targets = order.Items
             .Where(i => itemId is null || i.Id == itemId.Value)
@@ -380,6 +407,7 @@ public class OrderService : IOrderService
         }
 
         var synced = 0;
+        var createdCount = 0;
         var notFound = 0;
         var failed = 0;
         var errors = new List<string>();
@@ -388,19 +416,55 @@ public class OrderService : IOrderService
         {
             try
             {
-                var product = await _erpPushService.GetProductAsync(
-                    item.CustomerPartNo.Length > 0 ? item.CustomerPartNo : item.NestPartNo,
-                    item.Length?.ToString("0.##") ?? string.Empty,
-                    cancellationToken);
+                // 查询图号统一用 NEST 图号（与 ERP 侧图号体系一致），无 NEST 图号时回退客户图号
+                var th = item.NestPartNo.Length > 0 ? item.NestPartNo : item.CustomerPartNo;
+                var pic = item.Length?.ToString("0.##") ?? string.Empty;
+
+                var product = await _erpPushService.GetProductAsync(th, pic, cancellationToken);
 
                 if (string.IsNullOrWhiteSpace(product.PrdNo))
                 {
-                    item.MaterialSyncStatus = MaterialSyncStatus.NotFound;
-                    item.ErpPrdNo = string.Empty;
-                    notFound++;
+                    // ERP 中不存在该货品：调 PRD_TB 新建（米重系统内无数据，不传），再复查回填
+                    await _erpPushService.CreateProductAsync(new ErpProductCreateRequest
+                    {
+                        Th = th,
+                        Pic = pic,
+                        Spc = SpecParser.NormalizeSpec(item.Spec),
+                        Caiz = item.Material
+                    }, cancellationToken);
+
+                    var requery = await _erpPushService.GetProductAsync(th, pic, cancellationToken);
+                    if (string.IsNullOrWhiteSpace(requery.PrdNo))
+                    {
+                        item.MaterialSyncStatus = MaterialSyncStatus.Failed;
+                        item.ErpPrdNo = string.Empty;
+                        failed++;
+                        errors.Add($"第 {item.LineNo} 行：PRD_TB 已创建但 get_PRD 仍未查到货品代号（图号：{th}）");
+                        _logger.LogWarning("订单 {OrderNo} 第 {LineNo} 行新建货品后复查仍无货品代号", order.OrderNo, item.LineNo);
+                    }
+                    else
+                    {
+                        // 命中后回填：规格取接口返回的 SPC（规范化：去材质留孔型、减号结构转乘号，不为空时覆盖解析值）
+                        if (!string.IsNullOrWhiteSpace(requery.Spc))
+                        {
+                            item.Spec = SpecParser.NormalizeSpec(requery.Spc);
+                        }
+
+                        item.MaterialSyncStatus = MaterialSyncStatus.Synced;
+                        item.ErpPrdNo = requery.PrdNo;
+                        item.SyncedAt = DateTime.Now;
+                        synced++;
+                        createdCount++;
+                    }
                 }
                 else
                 {
+                    // 命中后回填：规格取接口返回的 SPC（规范化：去材质留孔型、减号结构转乘号，不为空时覆盖解析值）
+                    if (!string.IsNullOrWhiteSpace(product.Spc))
+                    {
+                        item.Spec = SpecParser.NormalizeSpec(product.Spc);
+                    }
+
                     item.MaterialSyncStatus = MaterialSyncStatus.Synced;
                     item.ErpPrdNo = product.PrdNo;
                     item.SyncedAt = DateTime.Now;
@@ -424,6 +488,7 @@ public class OrderService : IOrderService
             OrderId = order.Id,
             Total = targets.Count,
             Synced = synced,
+            Created = createdCount,
             NotFound = notFound,
             Failed = failed,
             ErrorMessage = errors.Count > 0 ? string.Join("；", errors) : null
@@ -442,5 +507,65 @@ public class OrderService : IOrderService
         }
 
         await _orderRepository.DeleteAsync(id, cancellationToken);
+    }
+
+    /// <summary>是否三可客户。</summary>
+    private static bool IsSanke(string? customerName)
+    {
+        return !string.IsNullOrWhiteSpace(customerName) && customerName.Contains("三可");
+    }
+
+    /// <summary>是否创达客户。</summary>
+    private static bool IsChuangda(string? customerName)
+    {
+        return !string.IsNullOrWhiteSpace(customerName) && customerName.Contains("创达");
+    }
+
+    /// <summary>三可客户图号：物料编码/收口（收口为空或 0 时仅物料编码；收口固定带 .0 与「收口」后缀，如 JSJ0406437/4.0收口）。</summary>
+    private static string BuildSankeKhth(string materialCode, string shouKou)
+    {
+        var sk = NormalizeShouKou(shouKou);
+        if (sk.Length == 0 || sk == "0" || sk == "不收口")
+        {
+            return materialCode;
+        }
+
+        return $"{materialCode}/{sk}收口";
+    }
+
+    /// <summary>收口数值规范化：4 → 4.0、4.50 → 4.5；非数值文本原样返回（不含「收口」后缀，后缀在拼接处统一加）。</summary>
+    private static string NormalizeShouKou(string? shouKou)
+    {
+        var sk = (shouKou ?? string.Empty).Trim();
+        if (sk.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (decimal.TryParse(sk, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var value))
+        {
+            // 保留一位小数，如 4 → 4.0、4.50 → 4.5
+            return value.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return sk;
+    }
+
+    /// <summary>从行备注提取「XXX根」数量（创达：如「202608032B，6410根」→ 6410）；无则返回 null。</summary>
+    private static decimal? ExtractQuantityFromRemark(string? remark)
+    {
+        if (string.IsNullOrWhiteSpace(remark))
+        {
+            return null;
+        }
+
+        var m = System.Text.RegularExpressions.Regex.Match(remark, @"(\d+(?:\.\d+)?)\s*根");
+        return m.Success && decimal.TryParse(m.Groups[1].Value, out var qty) ? qty : null;
+    }
+
+    /// <summary>推送 Ydd 预交日：有交货日期用交货日期；否则推送日期 +7 天。</summary>
+    private static string FormatYdd(DateTime? receiveDate, DateTime pushTime)
+    {
+        return (receiveDate ?? pushTime.AddDays(7)).ToString("yyyy-MM-dd");
     }
 }

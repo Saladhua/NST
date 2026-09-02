@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace OrderPlatform.Application.Orders;
 
-/// <summary>ERP 接口服务：封装按客户名称取客户 ID、按图号+长度取货品、生成受订单表头与表身等调用。</summary>
+/// <summary>ERP 接口服务：封装按客户名称取客户 ID、按图号+长度取货品、生成受订单表头与表身、新建货品资料等调用。</summary>
 public interface IErpPushService
 {
     /// <summary>根据客户名称获取客户 ID。</summary>
@@ -19,6 +19,9 @@ public interface IErpPushService
 
     /// <summary>生成受订单表身。</summary>
     Task<ErpItemResultDto> CreateOrderItemAsync(ErpOrderItemRequest request, CancellationToken cancellationToken);
+
+    /// <summary>新建货品资料（图号在 ERP 中不存在时创建）。</summary>
+    Task CreateProductAsync(ErpProductCreateRequest request, CancellationToken cancellationToken);
 
     /// <summary>本次服务实例内发生的全部 ERP 调用轨迹（含原始响应报文）。</summary>
     List<ErpApiCall> Calls { get; }
@@ -108,6 +111,12 @@ public class ErpOrderItemRequest
 
     /// <summary>预交日（yyyy-MM-dd）。</summary>
     public string Ydd { get; set; } = string.Empty;
+
+    /// <summary>客户图号（如三可：物料编码-收口）。</summary>
+    public string Khth { get; set; } = string.Empty;
+
+    /// <summary>客户订单号。</summary>
+    public string CusOs { get; set; } = string.Empty;
 }
 
 /// <summary>受订单表身结果。</summary>
@@ -115,6 +124,25 @@ public class ErpItemResultDto
 {
     /// <summary>结果信息。</summary>
     public string Jg { get; set; } = string.Empty;
+}
+
+/// <summary>新建货品资料请求。</summary>
+public class ErpProductCreateRequest
+{
+    /// <summary>图号。</summary>
+    public string Th { get; set; } = string.Empty;
+
+    /// <summary>长度。</summary>
+    public string Pic { get; set; } = string.Empty;
+
+    /// <summary>规格。</summary>
+    public string Spc { get; set; } = string.Empty;
+
+    /// <summary>材质。</summary>
+    public string Caiz { get; set; } = string.Empty;
+
+    /// <summary>米重（系统暂无该数据，为空时不传）。</summary>
+    public string? Mz { get; set; }
 }
 
 /// <summary>ERP 接口服务实现：通过 HTTP POST JSON 报文调用 PHP 接口。</summary>
@@ -190,6 +218,17 @@ public class ErpPushService : IErpPushService
             ["QTY1"] = request.Qty1,
             ["YDD"] = request.Ydd
         };
+        // 客户图号 / 客户订单号：最新接口新增字段，有值才传
+        if (!string.IsNullOrWhiteSpace(request.Khth))
+        {
+            payload["KHTH"] = request.Khth;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.CusOs))
+        {
+            payload["CUS_OS"] = request.CusOs;
+        }
+
         using var doc = await PostAsync("TF_POS", payload, cancellationToken);
         var jg = GetString(doc.RootElement, "JG");
         if (string.IsNullOrWhiteSpace(jg) ||
@@ -203,6 +242,24 @@ public class ErpPushService : IErpPushService
         }
 
         return new ErpItemResultDto { Jg = jg };
+    }
+
+    /// <summary>新建货品资料。接口文档未定义返回字段，调用成功（code=success）即视为创建成功。</summary>
+    public async Task CreateProductAsync(ErpProductCreateRequest request, CancellationToken cancellationToken)
+    {
+        var payload = new Dictionary<string, object>
+        {
+            ["TH"] = request.Th,
+            ["PIC"] = request.Pic,
+            ["SPC"] = request.Spc,
+            ["CAIZ"] = request.Caiz
+        };
+        if (!string.IsNullOrWhiteSpace(request.Mz))
+        {
+            payload["MZ"] = request.Mz;
+        }
+
+        await PostAsync("PRD_TB", payload, cancellationToken);
     }
 
     /// <summary>发送 POST JSON 请求并解析响应，把请求与原始响应报文原文记入调用轨迹。</summary>

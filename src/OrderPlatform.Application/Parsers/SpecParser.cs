@@ -251,4 +251,43 @@ public static partial class SpecParser
 
         return TrimNum(outer.Value) + "*" + TrimNum(wall.Value);
     }
+
+    /// <summary>
+    /// 规格展示/推送规范化：
+    /// 1. 括号内仅保留孔型等非材质内容（去掉 1060/3102/1100/3F03 等材质牌号），括号变空则整段删除；
+    /// 2. 「外径*壁厚-模数*长度」结构的减号转乘号并丢弃长度段（长度单独成列，不并入规格）。
+    /// 例：32*2*12（1060，圆孔）→ 32*2*12（圆孔）；18*1.8-14*210 → 18*1.8*14；
+    ///    32*1.3-32*862(方孔) → 32*1.3*32(方孔)；25.4*2-13*1686*4 → 25.4*2*13。
+    /// </summary>
+    public static string NormalizeSpec(string? spec)
+    {
+        if (string.IsNullOrWhiteSpace(spec))
+        {
+            return string.Empty;
+        }
+
+        var clean = spec.Trim().Replace(" ", string.Empty);
+
+        // 1. 去掉括号内的材质牌号，仅保留孔型等非材质词；括号空则整段删除（保留原括号类型）
+        clean = BracketPattern().Replace(clean, match =>
+        {
+            var open = match.Value[0];   // （ 或 (
+            var close = open == '（' ? '）' : ')';
+            var pieces = match.Groups[1].Value
+                .Split('，', ',', '/')
+                .Select(p => p.Trim())
+                .Where(p => p.Length > 0 && !IsMaterialText(p))
+                .ToList();
+            return pieces.Count > 0 ? $"{open}{string.Join("，", pieces)}{close}" : string.Empty;
+        });
+
+        // 2. 「外径*壁厚-模数*长度(*收口)(孔型)」→「外径*壁厚*模数(孔型)」：减号转乘号，丢弃长度段，保留尾部括号
+        var m = System.Text.RegularExpressions.Regex.Match(clean, @"^(\d+(?:\.\d+)?)\*(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)(?:\*[\d.]+)*([（(][^（）()]*[）)])?$");
+        if (m.Success)
+        {
+            clean = $"{m.Groups[1].Value}*{m.Groups[2].Value}*{m.Groups[3].Value}{m.Groups[4].Value}";
+        }
+
+        return clean;
+    }
 }
