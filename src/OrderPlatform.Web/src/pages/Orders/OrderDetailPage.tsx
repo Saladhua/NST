@@ -622,7 +622,6 @@ export default function OrderDetailPage() {
             </Descriptions.Item>
             <Descriptions.Item label="关联状态">{matchStatusTag(detail.parseStatus)}</Descriptions.Item>
             <Descriptions.Item label="推送状态">{pushStatusTag(detail.pushStatus)}</Descriptions.Item>
-            <Descriptions.Item label="ERP受订单号">{detail.erpOsNo || '-'}</Descriptions.Item>
             <Descriptions.Item label="关联 / 推送行">
               <Typography.Text>
                 关联 {matchedCount} / {detail.items.length}，已推 {pushedCount} 行
