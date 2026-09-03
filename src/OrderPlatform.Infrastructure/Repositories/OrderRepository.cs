@@ -54,12 +54,17 @@ public class OrderRepository : IOrderRepository
             return new Dictionary<Guid, int>();
         }
 
-        var result = await _dbContext.Orders
-            .AsNoTracking()
-            .Where(x => x.SourceFileId.HasValue && ids.Contains(x.SourceFileId.Value))
-            .GroupBy(x => x.SourceFileId!.Value)
-            .Select(g => new { SourceFileId = g.Key, Count = g.Count() })
-            .ToDictionaryAsync(x => x.SourceFileId, x => x.Count, cancellationToken);
+        // 逐 id 统计，避免 EF Core 对 Contains(Guid 列表) 生成 OPENJSON —— 老版本 SQL Server（2016 以下）不支持
+        var result = new Dictionary<Guid, int>();
+        foreach (var fileId in ids)
+        {
+            var count = await _dbContext.Orders
+                .AsNoTracking()
+                .CountAsync(x => x.SourceFileId == fileId, cancellationToken);
+
+            result[fileId] = count;
+        }
+
         return result;
     }
 
@@ -180,16 +185,22 @@ public class OrderRepository : IOrderRepository
             return new Dictionary<Guid, int>();
         }
 
-        var rows = await _dbContext.Orders
-            .AsNoTracking()
-            .Where(o => ids.Contains(o.CustomerId))
-            .SelectMany(o => o.Items, (o, i) => new { o.CustomerId, PartNo = i.CustomerPartNo })
-            .ToListAsync(cancellationToken);
+        // 逐客户查询，避免 EF Core 对 Contains(Guid 列表) 生成 OPENJSON —— 老版本 SQL Server（2016 以下）不支持
+        var result = new Dictionary<Guid, int>();
+        foreach (var customerId in ids)
+        {
+            var partNos = await _dbContext.Orders
+                .AsNoTracking()
+                .Where(o => o.CustomerId == customerId)
+                .SelectMany(o => o.Items, (o, i) => i.CustomerPartNo)
+                .Where(p => p != null && p != "")
+                .Distinct()
+                .ToListAsync(cancellationToken);
 
-        return rows
-            .Where(x => !string.IsNullOrWhiteSpace(x.PartNo))
-            .GroupBy(x => x.CustomerId)
-            .ToDictionary(g => g.Key, g => g.Select(x => x.PartNo).Distinct().Count());
+            result[customerId] = partNos.Count;
+        }
+
+        return result;
     }
 
     /// <summary>按订单批量取明细行已回填的 ERP 受订单号（同一订单多个受单号去重后以英文逗号拼接）。</summary>
@@ -203,17 +214,21 @@ public class OrderRepository : IOrderRepository
             return new Dictionary<Guid, string>();
         }
 
-        var rows = await _dbContext.OrderItems
-            .AsNoTracking()
-            .Where(i => ids.Contains(i.OrderId) && i.ErpOsNo != null && i.ErpOsNo != "")
-            .Select(i => new { i.OrderId, i.ErpOsNo })
-            .ToListAsync(cancellationToken);
+        // 逐订单查询，避免 EF Core 对 Contains(Guid 列表) 生成 OPENJSON —— 老版本 SQL Server（2016 以下）不支持
+        var result = new Dictionary<Guid, string>();
+        foreach (var orderId in ids)
+        {
+            var erpOsNos = await _dbContext.OrderItems
+                .AsNoTracking()
+                .Where(i => i.OrderId == orderId && i.ErpOsNo != null && i.ErpOsNo != "")
+                .Select(i => i.ErpOsNo!)
+                .Distinct()
+                .ToListAsync(cancellationToken);
 
-        return rows
-            .GroupBy(x => x.OrderId)
-            .ToDictionary(
-                g => g.Key,
-                g => string.Join(",", g.Select(x => x.ErpOsNo!.Trim()).Distinct()));
+            result[orderId] = string.Join(",", erpOsNos.Select(x => x.Trim()));
+        }
+
+        return result;
     }
 
     /// <summary>保存变更。</summary>
