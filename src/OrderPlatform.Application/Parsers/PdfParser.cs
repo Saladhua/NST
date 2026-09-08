@@ -207,7 +207,7 @@ public partial class PdfParser : IPdfParser
         if (!isYidaLayout)
         {
             // 布局A：按表头文本匹配
-            item.MaterialCode = GetHeaderCell(cells, "存货编码") ?? string.Empty;
+            item.MaterialCode = NormalizeMaterialCode(GetHeaderCell(cells, "存货编码"));
             item.MaterialName = GetHeaderCell(cells, "存货名称") ?? string.Empty;
             item.Spec = (GetHeaderCell(cells, "规格型号") ?? GetHeaderCell(cells, "规格")) ?? string.Empty;
             item.Unit = GetHeaderCell(cells, "单位") ?? string.Empty;
@@ -234,7 +234,7 @@ public partial class PdfParser : IPdfParser
 
             if (ordered.Count >= 3)
             {
-                item.MaterialCode = ordered[2].Value.Trim();
+                item.MaterialCode = NormalizeMaterialCode(ordered[2].Value);
             }
 
             if (ordered.Count >= 4)
@@ -273,7 +273,7 @@ public partial class PdfParser : IPdfParser
             if (string.IsNullOrEmpty(item.MaterialCode))
             {
                 var raw = string.Concat(ordered.Select(kv => kv.Value));
-                item.MaterialCode = CodeRegex.Matches(raw).Select(m => m.Value).FirstOrDefault() ?? string.Empty;
+                item.MaterialCode = NormalizeMaterialCode(CodeRegex.Matches(raw).Select(m => m.Value).FirstOrDefault() ?? string.Empty);
                 var old = OldCodeRegex.Match(raw);
                 if (old.Success && string.IsNullOrEmpty(item.MaterialName))
                 {
@@ -334,7 +334,7 @@ public partial class PdfParser : IPdfParser
         }
     }
 
-    /// <summary>解析小数（去除千分位逗号）。</summary>
+    /// <summary>解析小数（兼容逗号小数分隔符，如 607,5 → 607.5；千分位逗号仍按数字处理）。</summary>
     private static decimal ParseDecimal(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -342,13 +342,17 @@ public partial class PdfParser : IPdfParser
             return 0;
         }
 
-        var cleaned = text.Replace(",", string.Empty);
-        if (decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var value))
+        var s = text.Trim();
+        if (s.Contains(','))
         {
-            return value;
+            var parts = s.Split(',');
+            var isThousands = parts.Length > 1
+                && parts.Take(parts.Length - 1).All(p => p.Trim().Length == 3)
+                && parts[^1].Trim().Length is <= 3 and > 0;
+            s = isThousands ? s.Replace(",", string.Empty) : s.Replace(',', '.');
         }
 
-        return 0;
+        return decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var value) ? value : 0;
     }
 
     /// <summary>解析日期（支持 yyyy-MM-dd 格式）。</summary>
@@ -467,6 +471,60 @@ public partial class PdfParser : IPdfParser
 
     /// <summary>归一化词文本（去除首尾空白）。</summary>
     private static string Normalize(string text) => text.Trim();
+
+    /// <summary>
+    /// 规范化存货编码：修复 PDF 表格单元格内换行导致的编码乱序。
+    /// 「存货编码」列由 模具/材质（D97/1100）与 编码主体（03.02.16*1.6*241/）两行组成，
+    /// 按行顺序拼接后会出现两种乱序：① 前缀式 D97/110003.02.16*1.6*241/；② 错位式 7/110003.02.20*2*497/D9。
+    /// 统一还原为规范格式 编码主体/模具/材质，如 03.02.16*1.6*241/D97/1100。
+    public static string NormalizeMaterialCode(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            return string.Empty;
+        }
+
+        var clean = code.Trim();
+
+        // ① 首尾分裂：D97/1100 被拆成「97/1100…/D」（缺失首字符 D）或「/1100…/D97」（缺失中段）
+        //    还原为 编码主体/D97/1100，如 97/110003.02.18*1.8*222/D → 03.02.18*1.8*222/D97/1100
+        var splitEnds = Regex.Match(clean, @"^(97/1100)(.+)/D$|^(/1100)(.+)/D97$");
+        if (splitEnds.Success)
+        {
+            clean = splitEnds.Groups[2].Success
+                ? splitEnds.Groups[2].Value + "/D" + "97/1100"
+                : splitEnds.Groups[4].Value + "/D97/" + "1100";
+        }
+
+        // ② 错位式：以数字开头且尾部的「D+数字」被拆离（如 7/110003.02.20*2*497/D9），将尾部 D9 移回头部，
+        //    还原为 D9/7/110003.02.20*2*497/ 后再交给 ③ 处理
+        var misplaced = Regex.Match(clean, @"^(\d+)/(.+?)(D\d+)$");
+        if (misplaced.Success)
+        {
+            clean = misplaced.Groups[3].Value + "/" + misplaced.Groups[1].Value + "/" + misplaced.Groups[2].Value;
+        }
+
+        // ③ 断字合并：D9 与 7 是 D97 被断字拆开（如 D9/7/110003.02.20*2*497/），合并还原 D97/110003.02.20*2*497/
+        var split = Regex.Match(clean, @"^(D\d)/(\d)/(.+)$");
+        if (split.Success)
+        {
+            clean = "D" + split.Groups[1].Value.Substring(1) + split.Groups[2].Value + "/" + split.Groups[3].Value;
+        }
+
+        // ④ 前缀式：D97/1100 被拼到主体之前（如 D97/110003.02.16*1.6*241/），移到主体之后
+        //    模具号 D97 后固定接 3~4 位材质牌号（1100/3102/3F03），限定位数避免吞掉主体开头的数字
+        var prefixed = Regex.Match(clean, @"^(D\d+/\d{3,4})(.+)$");
+        if (prefixed.Success)
+        {
+            var body = prefixed.Groups[2].Value;
+            var suffix = prefixed.Groups[1].Value;
+            clean = body.EndsWith("/", StringComparison.Ordinal)
+                ? body + suffix
+                : body + "/" + suffix;
+        }
+
+        return clean;
+    }
 
     /// <summary>订单号模式：PO- 开头、CGDD 或 CD 开头的编码。</summary>
     [GeneratedRegex(@"(PO-?\d[\d\-]*|CGDD\d+|CD\d{10,})")]

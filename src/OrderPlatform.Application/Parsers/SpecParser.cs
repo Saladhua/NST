@@ -68,7 +68,7 @@ public static partial class SpecParser
             return result;
         }
 
-        var clean = spec.Trim().Replace(" ", string.Empty);
+        var clean = FixMissingSlash(spec.Trim().Replace(" ", string.Empty));
         if (!ValidSpecPattern().IsMatch(clean))
         {
             return result;
@@ -130,17 +130,29 @@ public static partial class SpecParser
                 }
             }
 
+            // 「数字+D模具号」粘连段（缺斜杠，如 176D97/1100）：剥离模具号并把数字计入数值段
+            var joined = Regex.Match(main, @"^(\d+(?:\.\d+)?)(D\d+)$");
+            if (joined.Success)
+            {
+                if (TryParseNumber(joined.Groups[1].Value, out var joinedNum))
+                {
+                    numbers.Add(joinedNum);
+                }
+
+                result.MoldNo = joined.Groups[2].Value;
+                continue;
+            }
+
             // 「-」分段：壁厚-模数（如 2.0-12、2-13）
             if (main.Contains('-'))
             {
                 var dashParts = main.Split('-');
-                if (decimal.TryParse(dashParts[0], NumberStyles.Any, CultureInfo.InvariantCulture, out var wall))
+                if (TryParseNumber(dashParts[0], out var wall))
                 {
                     result.WallThickness = wall;
                 }
 
-                if (dashParts.Length > 1
-                    && decimal.TryParse(dashParts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var mod))
+                if (dashParts.Length > 1 && TryParseNumber(dashParts[1], out var mod))
                 {
                     result.Module = mod;
                 }
@@ -148,7 +160,7 @@ public static partial class SpecParser
                 continue;
             }
 
-            if (decimal.TryParse(main, NumberStyles.Any, CultureInfo.InvariantCulture, out var num))
+            if (TryParseNumber(main, out var num))
             {
                 numbers.Add(num);
             }
@@ -235,6 +247,45 @@ public static partial class SpecParser
         return Regex.IsMatch(text, @"^\d{4}$|^\d[A-Z]\d{2}$|^\d{3}[A-Z]$");
     }
 
+    /// <summary>
+    /// 修复规格中「数字+D模具号」粘连缺失斜杠的问题（PDF 单元格内换行断字导致），
+    /// 如 16*1.6*176D97/1100 → 16*1.6*176/D97/1100；已带斜杠的规格不受影响。
+    /// </summary>
+    private static string FixMissingSlash(string spec)
+    {
+        if (string.IsNullOrWhiteSpace(spec))
+        {
+            return string.Empty;
+        }
+
+        // 「176D97/1100」：把数字结束紧接 D 模具号且后跟数码/材质段的位置补上斜杠
+        return Regex.Replace(spec, @"(\d+)D(?=\d+/)", "$1/D", RegexOptions.None, TimeSpan.FromSeconds(1));
+    }
+
+    /// <summary>
+    /// 解析数值：兼容逗号小数（如 607,5 → 607.5）与千分位逗号（如 1,280 → 1280）。
+    /// 逗号后不足 3 位（或段数不整）视为小数分隔符，否则视为千分位。
+    /// </summary>
+    private static bool TryParseNumber(string? text, out decimal value)
+    {
+        value = 0;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var s = text.Trim();
+        if (s.Contains(','))
+        {
+            var parts = s.Split(',');
+            var isThousands = parts.Length > 1
+                && parts.Skip(1).All(p => p.Trim().Length == 3);
+            s = isThousands ? s.Replace(",", string.Empty) : s.Replace(',', '.');
+        }
+
+        return decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out value);
+    }
+
     /// <summary>数值转紧凑文本（去掉无意义的小数位，如 4.0 → 4、2.50 → 2.5）。</summary>
     public static string TrimNum(decimal value)
     {
@@ -266,7 +317,7 @@ public static partial class SpecParser
             return string.Empty;
         }
 
-        var clean = spec.Trim().Replace(" ", string.Empty);
+        var clean = FixMissingSlash(spec.Trim().Replace(" ", string.Empty));
 
         // 1. 去掉括号内的材质牌号，仅保留孔型等非材质词；括号空则整段删除（保留原括号类型）
         clean = BracketPattern().Replace(clean, match =>
@@ -287,6 +338,11 @@ public static partial class SpecParser
         {
             clean = $"{m.Groups[1].Value}*{m.Groups[2].Value}*{m.Groups[3].Value}{m.Groups[4].Value}";
         }
+
+        // 3. 剥离尾部模具/材质段（/D97/1100 或粘连的 D97/1100），规格列仅保留 外径*壁厚*长度 三段
+        //    如 16*1.6*176/D97/1100 → 16*1.6*176；16*1.6*176D97/1100 → 16*1.6*176
+        clean = Regex.Replace(clean, @"/D\d+/\d{3,4}$", string.Empty);
+        clean = Regex.Replace(clean, @"D\d+/\d{3,4}$", string.Empty);
 
         return clean;
     }

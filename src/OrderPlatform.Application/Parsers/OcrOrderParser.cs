@@ -300,11 +300,13 @@ public partial class OcrOrderParser : IOcrOrderParser
         return columns;
     }
 
-    /// <summary>按列区间归位：数据块中心落在哪个列区间即归该列；区间外则回到最近列中心。</summary>
+    /// <summary>按列区间归位：数据块中心落在哪个列区间即归该列；区间外则回到最近列中心。
+    /// 同列多块按阅读顺序拼接（先按行 Y、再按 X），避免单元格内换行/折行碎片被 X 排序打乱
+    /// （如创达行备注跨行时「14570」「根」被拆块后顺序颠倒，导致「XXX根」取数失效）。</summary>
     private static Dictionary<string, string> AssignCellsByRegion(List<OcrWord> row, List<ColumnRegion> columns)
     {
         var cells = new Dictionary<string, string>();
-        foreach (var word in row.OrderBy(w => w.X))
+        foreach (var word in row.OrderBy(w => w.Y).ThenBy(w => w.X))
         {
             var center = CenterX(word);
             var col = columns.FirstOrDefault(c => center >= c.Left && center <= c.Right)
@@ -353,7 +355,7 @@ public partial class OcrOrderParser : IOcrOrderParser
         return new PdfParseRow
         {
             LineNo = lineNo,
-            MaterialCode = CleanCode(Cell("物料编码")),
+            MaterialCode = PdfParser.NormalizeMaterialCode(CleanCode(Cell("物料编码"))),
             MaterialName = Cell("物料名称"),
             Spec = spec,
             Unit = Cell("主单位"),
@@ -389,7 +391,7 @@ public partial class OcrOrderParser : IOcrOrderParser
         return text.Replace(" ", string.Empty).Replace("口", "0").Replace("O", "0").Replace("l", "1").Replace("|", string.Empty);
     }
 
-    /// <summary>解析小数（去除千分位与 OCR 误识分隔符）。</summary>
+    /// <summary>解析小数（兼容逗号小数与千分位逗号，如 607,5 → 607.5）。</summary>
     private static decimal ParseDecimal(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -397,8 +399,22 @@ public partial class OcrOrderParser : IOcrOrderParser
             return 0;
         }
 
-        var cleaned = text.Replace(",", string.Empty).Replace("，", string.Empty).Replace(" ", string.Empty);
-        return decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) ? v : 0;
+        var s = text.Trim().Replace(" ", string.Empty);
+        if (s.Contains(','))
+        {
+            var parts = s.Split(',');
+            var isThousands = parts.Length > 1
+                && parts.Take(parts.Length - 1).All(p => p.Trim().Length == 3)
+                && parts[^1].Trim().Length is <= 3 and > 0;
+            s = isThousands ? s.Replace(",", string.Empty) : s.Replace(',', '.').Replace("，", string.Empty);
+        }
+        else
+        {
+            // 中文逗号为小数分隔符（如 607，5）
+            s = s.Replace("，", ".");
+        }
+
+        return decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) ? v : 0;
     }
 
     /// <summary>解析日期。</summary>

@@ -313,8 +313,11 @@ export default function OrderListPage() {
       title: '订单号',
       dataIndex: 'orderNo',
       key: 'orderNo',
+      ellipsis: true,
       render: (value: string, record: OrderListDto) => (
-        <a onClick={() => navigate(`/orders/${record.id}`)}>{value}</a>
+        <Tooltip title={value}>
+          <a onClick={() => navigate(`/orders/${record.id}`)}>{value}</a>
+        </Tooltip>
       ),
     },
     { title: '客户', dataIndex: 'customerName', key: 'customerName', width: 140 },
@@ -492,6 +495,7 @@ export default function OrderListPage() {
         columns={columns}
         dataSource={data}
         loading={loading}
+        scroll={{ x: 'max-content' }}
         rowSelection={{
           selectedRowKeys,
           onChange: (keys) => setSelectedRowKeys(keys),

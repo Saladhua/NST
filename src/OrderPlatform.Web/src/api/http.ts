@@ -27,8 +27,12 @@ interface RetriableRequestConfig extends AxiosRequestConfig {
   _retried?: boolean;
 }
 
+// 后端地址：客户环境 IIS 直连模式需写死绝对地址，由构建时注入
+// （.env.production 的 VITE_API_BASE）；本地开发走相对路径经 Vite 代理。
+const API_BASE: string = import.meta.env.VITE_API_BASE || '/api';
+
 const axiosInstance = axios.create({
-  baseURL: '/api',
+  baseURL: API_BASE,
   timeout: 15000,
 });
 
@@ -86,7 +90,7 @@ async function refreshTokenOnce(): Promise<string> {
   isRefreshing = true;
   try {
     const response = await axios.post<ApiResponse<AuthResult>>(
-      '/api/auth/refresh',
+      `${API_BASE}/auth/refresh`,
       { refreshToken },
       { timeout: 15000 },
     );
