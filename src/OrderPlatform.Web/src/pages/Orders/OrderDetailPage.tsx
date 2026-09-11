@@ -211,7 +211,7 @@ export default function OrderDetailPage() {
   const [selectedItemIds, setSelectedItemIds] = useState<Key[]>([]);
   // 明细表分页
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(10);
   // 列宽拖拽覆盖值（仅本次会话，刷新后恢复默认）
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
 
