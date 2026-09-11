@@ -548,8 +548,8 @@ public class UploadService : IUploadService
 
             var spec = SpecParser.ParseOrderSpec(row.Spec);
 
-            // 材质取 Excel 客户资料匹配到的合金（AI 扫描资料），PDF 解析的材质不作为来源
-            var orderMaterial = match.Alloy;
+            // 材质：三可取订单文件材质列（3F03+Zn-H112 → 3F03），其余客户取客户资料匹配到的合金
+            var orderMaterial = ResolveOrderMaterial(strategyName, row, match);
 
             // 创达数量以行备注「XXX根」为准（如「202608235A，1840根」→ 1840）
             var quantity = isChuangda
@@ -582,7 +582,7 @@ public class UploadService : IUploadService
                 Unit = row.Unit,
                 Price = row.Price,
                 Amount = row.Amount,
-                ReceiveDate = row.ReceiveDate,
+                ReceiveDate = ResolveReceiveDate(strategyName, row.ReceiveDate),
                 Remark = row.Remark,
                 MatchStatus = match.Status,
                 MaterialSyncStatus = MaterialSyncStatus.NotSynced,
@@ -647,6 +647,47 @@ public class UploadService : IUploadService
     private static bool IsChuangda(string? name)
     {
         return !string.IsNullOrWhiteSpace(name) && name.Contains("创达");
+    }
+
+    /// <summary>是否三可客户。</summary>
+    private static bool IsSanke(string? name)
+    {
+        return !string.IsNullOrWhiteSpace(name) && name.Contains("三可");
+    }
+
+    /// <summary>是否发润达客户（含原名称法拉达）。</summary>
+    private static bool IsFarada(string? name)
+    {
+        return !string.IsNullOrWhiteSpace(name) && (name.Contains("发润达") || name.Contains("法拉达"));
+    }
+
+    /// <summary>明细交货日期：发润达提前 5 天交期，其余客户按单据原值。</summary>
+    private static DateTime? ResolveReceiveDate(string? customerName, DateTime? receiveDate)
+    {
+        if (IsFarada(customerName) && receiveDate.HasValue)
+        {
+            return receiveDate.Value.AddDays(-5);
+        }
+
+        return receiveDate;
+    }
+
+    /// <summary>
+    /// 明细材质：三可取订单文件材质列并提取牌号（如 3F03+Zn-H112 → 3F03），缺失时回退到客户资料匹配到的合金；
+    /// 其余客户取客户资料匹配到的合金。
+    /// </summary>
+    private static string ResolveOrderMaterial(string? customerName, PdfParseRow row, MatchResult match)
+    {
+        if (IsSanke(customerName))
+        {
+            var extracted = MatchService.ExtractMaterial(row.Material);
+            if (extracted.Length > 0)
+            {
+                return extracted;
+            }
+        }
+
+        return match.Alloy;
     }
 
     /// <summary>从行备注提取「XXX根」数量（创达：如「202608032B，6410根」→ 6410）；无则返回 null。</summary>
@@ -847,13 +888,20 @@ public class UploadService : IUploadService
         await _customerRepository.SaveChangesAsync(cancellationToken);
     }
 
-    /// <summary>批次实体转 DTO，计算订单删除标记（已完成但无订单且非重复导入）。</summary>
+    /// <summary>批次实体转 DTO，计算订单删除标记（订单文件已完成但已无订单，且非重复导入 / 未解析出明细）。</summary>
     private async Task<UploadBatchDto> ToDtoAsync(
         UploadBatch batch,
         int orderCount,
         CancellationToken cancellationToken,
         Dictionary<Guid, Customer>? customerMap = null)
     {
+        // 订单文件判定：PDF 一律为订单；Excel 订单会写入识别到的客户，Excel 客户资料不写（CustomerId 为空）
+        var isOrderFile = batch.FileType == "PDF"
+            || (batch.FileType == "Excel" && batch.CustomerId.HasValue);
+        // 「已存在」= 重复导入跳过；「未解析出有效订单明细」= 从未生成订单。两者都不属于「订单已删除」
+        var skippedAsDuplicate = batch.ErrorMessage?.Contains("已存在") ?? false;
+        var noOrderRows = batch.ErrorMessage?.Contains("未解析出有效订单明细") ?? false;
+
         var dto = new UploadBatchDto
         {
             BatchId = batch.Id,
@@ -865,10 +913,11 @@ public class UploadService : IUploadService
             Progress = batch.Progress,
             ErrorMessage = batch.ErrorMessage,
             OrderCount = orderCount,
-            OrderDeleted = batch.FileType == "PDF"
+            OrderDeleted = isOrderFile
                 && batch.Status == UploadStatus.Completed
                 && orderCount == 0
-                && !(batch.ErrorMessage?.Contains("已存在") ?? false),
+                && !skippedAsDuplicate
+                && !noOrderRows,
             CreatedAt = batch.CreatedAt
         };
 

@@ -209,6 +209,9 @@ export default function OrderDetailPage() {
   const [syncing, setSyncing] = useState(false);
   // 勾选推送的明细行 ID（仅未推送且已匹配的行可勾选）
   const [selectedItemIds, setSelectedItemIds] = useState<Key[]>([]);
+  // 明细表分页
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   // 列宽拖拽覆盖值（仅本次会话，刷新后恢复默认）
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
 
@@ -226,6 +229,11 @@ export default function OrderDetailPage() {
       setLoading(false);
     }
   }, [id, message]);
+
+  useEffect(() => {
+    setPage(1);
+    setSelectedItemIds([]);
+  }, [id]);
 
   useEffect(() => {
     void load();
@@ -502,6 +510,7 @@ export default function OrderDetailPage() {
       dataIndex: 'matchStatus',
       key: 'matchStatus',
       width: widthOf('matchStatus'),
+      fixed: 'right' as const,
       onHeaderCell: () => ({
         width: widthOf('matchStatus'),
         minWidth: minWidthOf('matchStatus'),
@@ -513,6 +522,7 @@ export default function OrderDetailPage() {
       title: '物料同步',
       key: 'materialSync',
       width: widthOf('materialSync'),
+      fixed: 'right' as const,
       onHeaderCell: () => ({
         width: widthOf('materialSync'),
         minWidth: minWidthOf('materialSync'),
@@ -537,6 +547,7 @@ export default function OrderDetailPage() {
       dataIndex: 'erpOsNo',
       key: 'itemErpOsNo',
       width: widthOf('itemErpOsNo'),
+      fixed: 'right' as const,
       onHeaderCell: () => ({
         width: widthOf('itemErpOsNo'),
         minWidth: minWidthOf('itemErpOsNo'),
@@ -550,6 +561,7 @@ export default function OrderDetailPage() {
       dataIndex: 'itemPushStatus',
       key: 'itemPushStatus',
       width: widthOf('itemPushStatus'),
+      fixed: 'right' as const,
       onHeaderCell: () => ({
         width: widthOf('itemPushStatus'),
         minWidth: minWidthOf('itemPushStatus'),
@@ -644,7 +656,17 @@ export default function OrderDetailPage() {
           columns={columns}
           dataSource={detail?.items ?? []}
           loading={loading}
-          pagination={false}
+          pagination={{
+            current: page,
+            pageSize,
+            total: detail?.items.length ?? 0,
+            showSizeChanger: true,
+            showTotal: (t) => `共 ${t} 条`,
+            onChange: (p, ps) => {
+              setPage(p);
+              setPageSize(ps);
+            },
+          }}
           size="small"
           rowSelection={{
             selectedRowKeys: selectedItemIds,

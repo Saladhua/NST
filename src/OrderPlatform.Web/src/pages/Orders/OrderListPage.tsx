@@ -382,6 +382,7 @@ export default function OrderListPage() {
       title: '操作',
       key: 'action',
       width: 150,
+      fixed: 'right' as const,
       render: (_: unknown, record: OrderListDto) => (
         <Space>
           <Button type="link" size="small" onClick={() => navigate(`/orders/${record.id}`)}>
