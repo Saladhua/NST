@@ -23,6 +23,9 @@ public class MatchResult
     /// <summary>长度（mm）。</summary>
     public decimal? Length { get; init; }
 
+    /// <summary>摘要（客户资料「摘要」列，如华尔达的「40支/把」）。</summary>
+    public string Summary { get; init; } = string.Empty;
+
     /// <summary>匹配状态。</summary>
     public MatchStatus Status { get; init; }
 
@@ -49,6 +52,15 @@ public static partial class MatchService
     /// <summary>「外径×壁厚」规格前缀的正则，如 16*1.4。</summary>
     private static readonly Regex SpecPrefixRegex = new(@"^(\d+(?:\.\d+)?)\s*\*\s*(\d+(?:\.\d+)?)");
 
+    /// <summary>平台支持的客户（客户资料基础数据只展示这几家）。</summary>
+    private static readonly string[] SupportedCustomerKeywords = { "创达", "华尔达", "三可", "发润达", "法拉达", "马鞍山仪达" };
+
+    /// <summary>是否平台支持的客户（按名称包含判断，兼容「发润达 / 法拉达」两种叫法）。</summary>
+    public static bool IsSupportedCustomer(string? name)
+    {
+        return !string.IsNullOrWhiteSpace(name) && SupportedCustomerKeywords.Any(k => name.Contains(k));
+    }
+
     /// <summary>材质牌号提取：3F03+Zn-H112 → 3F03。</summary>
     [GeneratedRegex(@"\d[A-Z]\d{2}|\d{4}")]
     private static partial Regex MaterialTokenPattern();
@@ -72,7 +84,7 @@ public static partial class MatchService
                 !string.IsNullOrWhiteSpace(p.CustomerPartNo) && p.CustomerPartNo.Trim() == materialCode);
             if (exact is not null)
             {
-                return FromPart(exact);
+                return FromPart(exact, row.MaterialCode);
             }
         }
 
@@ -85,9 +97,9 @@ public static partial class MatchService
         var strategy = ResolveStrategy(customerName);
         return strategy switch
         {
-            CustomerStrategy.Sanke => MatchBySpec(row, parts, compareModule: true, compareShouKou: true, compareMaterial: true, compareLength: false),
-            CustomerStrategy.Huaruda => MatchBySpec(row, parts, compareModule: false, compareShouKou: false, compareMaterial: true, compareLength: true),
-            CustomerStrategy.Falada => MatchBySpec(row, parts, compareModule: false, compareShouKou: false, compareMaterial: false, compareLength: true),
+            CustomerStrategy.Sanke => MatchBySpec(customerName, row, parts, compareModule: true, compareShouKou: true, compareMaterial: true, compareLength: false),
+            CustomerStrategy.Huaruda => MatchBySpec(customerName, row, parts, compareModule: false, compareShouKou: false, compareMaterial: true, compareLength: true),
+            CustomerStrategy.Falada => MatchBySpec(customerName, row, parts, compareModule: false, compareShouKou: false, compareMaterial: false, compareLength: true),
             _ => MatchBySpecPrefix(row, parts)
         };
     }
@@ -133,6 +145,7 @@ public static partial class MatchService
     /// 全条件无命中时材质条件降级重试一次（订单与资料的合金牌号体系可能不一致，如华尔达订单 /1100 与资料 3102），降级后仍要求唯一命中。
     /// </summary>
     private static MatchResult MatchBySpec(
+        string? customerName,
         PdfParseRow row,
         List<CustomerPart> parts,
         bool compareModule,
@@ -146,11 +159,7 @@ public static partial class MatchService
             return MatchResult.Unmatched();
         }
 
-        var orderMaterial = ExtractMaterial(row.Material);
-        if (orderMaterial.Length == 0)
-        {
-            orderMaterial = spec.Material;
-        }
+        var orderMaterial = ResolveOrderMaterial(customerName, row, spec);
 
         var candidates = FilterBySpec(parts, spec, orderMaterial, compareModule, compareShouKou, compareMaterial, compareLength);
         if (candidates.Count == 0 && compareMaterial && orderMaterial.Length > 0)
@@ -159,7 +168,7 @@ public static partial class MatchService
             candidates = FilterBySpec(parts, spec, orderMaterial, compareModule, compareShouKou, compareMaterial: false, compareLength);
         }
 
-        return candidates.Count == 1 ? FromPart(candidates[0]) : MatchResult.Unmatched();
+        return candidates.Count == 1 ? FromPart(candidates[0], row.MaterialCode) : MatchResult.Unmatched();
     }
 
     /// <summary>按规格条件过滤资料。</summary>
@@ -191,10 +200,10 @@ public static partial class MatchService
             });
         }
 
-        // 条件3：收口（三可，资料有值才比对）
+        // 条件3：收口（三可，资料有值才比对；「不收口」与 0/空 等价）
         if (compareShouKou && !string.IsNullOrWhiteSpace(spec.ShouKou))
         {
-            query = query.Where(p => string.IsNullOrWhiteSpace(p.ShouKou) || SameText(p.ShouKou, spec.ShouKou));
+            query = query.Where(p => string.IsNullOrWhiteSpace(p.ShouKou) || SameShouKou(p.ShouKou, spec.ShouKou));
         }
 
         // 条件4：材质（资料有值才比对）
@@ -233,19 +242,22 @@ public static partial class MatchService
             })
             .ToList();
 
-        return candidates.Count == 1 ? FromPart(candidates[0]) : MatchResult.Unmatched();
+        return candidates.Count == 1 ? FromPart(candidates[0], row.MaterialCode) : MatchResult.Unmatched();
     }
 
-    /// <summary>资料命中转匹配结果。</summary>
-    private static MatchResult FromPart(CustomerPart part)
+    /// <summary>资料命中转匹配结果。资料未提供客户图号时回退用料件编号（二者为同一编码）。</summary>
+    private static MatchResult FromPart(CustomerPart part, string? materialCode)
     {
         return new MatchResult
         {
-            CustomerPartNo = part.CustomerPartNo,
+            CustomerPartNo = string.IsNullOrWhiteSpace(part.CustomerPartNo)
+                ? (materialCode ?? string.Empty).Trim()
+                : part.CustomerPartNo,
             NestPartNo = part.NestPartNo,
             Alloy = part.Alloy,
             Spray = part.Spray,
             Length = part.Length,
+            Summary = part.Summary,
             Status = MatchStatus.Matched
         };
     }
@@ -260,6 +272,91 @@ public static partial class MatchService
 
         var m = MaterialTokenPattern().Match(text);
         return m.Success ? m.Value : string.Empty;
+    }
+
+    /// <summary>
+    /// 订单行材质。
+    /// 华尔达：按单据列顺序取靠后的材质（规格 → 材质列 → 表体备注），后出现的覆盖先前的
+    /// （如规格 22*2*283/D97/1100、表体备注 3F03，以 3F03 为准）；
+    /// 其余客户：材质列优先，其次规格，不读备注。
+    /// </summary>
+    public static string ResolveOrderMaterial(string? customerName, PdfParseRow row, SpecParts spec)
+    {
+        var fromColumn = ExtractMaterial(row.Material);
+
+        if (!IsHuaruda(customerName))
+        {
+            return fromColumn.Length > 0 ? fromColumn : spec.Material;
+        }
+
+        var material = spec.Material;
+
+        if (fromColumn.Length > 0)
+        {
+            material = fromColumn;
+        }
+
+        var fromRemark = ExtractRemarkMaterial(row.Remark);
+        if (fromRemark.Length > 0)
+        {
+            material = fromRemark;
+        }
+
+        return material;
+    }
+
+    /// <summary>订单行材质（自行解析规格）。</summary>
+    public static string ResolveOrderMaterial(string? customerName, PdfParseRow row)
+    {
+        return ResolveOrderMaterial(customerName, row, SpecParser.ParseOrderSpec(row.Spec));
+    }
+
+    /// <summary>是否华尔达客户（本规则仅适用于该客户）。</summary>
+    private static bool IsHuaruda(string? customerName)
+    {
+        return !string.IsNullOrWhiteSpace(customerName) && customerName.Contains("华尔达");
+    }
+
+    /// <summary>备注分段的分隔符。</summary>
+    private static readonly char[] RemarkSeparators =
+        { ' ', '\t', ';', '；', ',', '，', '/', '\\', '|', '、', ':', '：', '(', ')', '（', '）' };
+
+    /// <summary>
+    /// 备注里的材质：仅当备注按分隔符切开后有整段本身就是材质牌号时才采纳（华尔达表体备注「3F03」），
+    /// 避免把三可「SCB-014-1; 等通知送/2175-071」、创达「202609085A，14570根」这类单号误判为材质。
+    /// 多段命中时取最后一段。
+    /// </summary>
+    private static string ExtractRemarkMaterial(string? remark)
+    {
+        if (string.IsNullOrWhiteSpace(remark))
+        {
+            return string.Empty;
+        }
+
+        var result = string.Empty;
+        foreach (var piece in remark.Split(RemarkSeparators, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = piece.Trim();
+            if (SpecParser.IsMaterialText(candidate))
+            {
+                result = candidate;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>收口比对：订单侧用 0、资料侧用「不收口」，二者与空值视为同一含义。</summary>
+    private static bool SameShouKou(string a, string b)
+    {
+        return SameText(NormalizeShouKou(a), NormalizeShouKou(b));
+    }
+
+    /// <summary>收口归一化：不收口 / 0 / 空 → 空串。</summary>
+    private static string NormalizeShouKou(string? text)
+    {
+        var t = (text ?? string.Empty).Trim();
+        return t.Length == 0 || t == "0" || t == "不收口" ? string.Empty : t;
     }
 
     /// <summary>文本比对（忽略大小写与首尾空白；数值文本归一化后比对，如 10 与 10.0 视为相等）。</summary>

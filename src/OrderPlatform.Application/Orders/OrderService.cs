@@ -39,6 +39,7 @@ public class OrderService : IOrderService
 
     private readonly IOrderRepository _orderRepository;
     private readonly ICustomerRepository _customerRepository;
+    private readonly ICustomerPartRepository _customerPartRepository;
     private readonly IOrderPushLogRepository _pushLogRepository;
     private readonly IErpPushService _erpPushService;
     private readonly IMapper _mapper;
@@ -47,6 +48,7 @@ public class OrderService : IOrderService
     public OrderService(
         IOrderRepository orderRepository,
         ICustomerRepository customerRepository,
+        ICustomerPartRepository customerPartRepository,
         IOrderPushLogRepository pushLogRepository,
         IErpPushService erpPushService,
         IMapper mapper,
@@ -54,6 +56,7 @@ public class OrderService : IOrderService
     {
         _orderRepository = orderRepository;
         _customerRepository = customerRepository;
+        _customerPartRepository = customerPartRepository;
         _pushLogRepository = pushLogRepository;
         _erpPushService = erpPushService;
         _mapper = mapper;
@@ -76,7 +79,7 @@ public class OrderService : IOrderService
         var customers = await _customerRepository.ListAsync(cancellationToken);
         var customerMap = customers.ToDictionary(c => c.Id, c => c.Name);
 
-        // 受单号优先取明细行已回填值（同一订单部分推送多次会有多个受单号，逗号拼接），无明细值时回退订单表头号
+        // 受单号优先取明细行已回填值（整单只生成一个受单号，历史分批数据可能有多个，去重后逗号拼接），无明细值时回退订单表头号
         var orderIds = items.Select(o => o.Id).ToList();
         var itemOsNoMap = await _orderRepository.GetItemErpOsNosByOrderIdsAsync(orderIds, cancellationToken);
 
@@ -144,6 +147,8 @@ public class OrderService : IOrderService
                 ReceiveDate = i.ReceiveDate,
                 PushedAt = i.PushedAt,
                 Remark = i.Remark,
+                // 摘要：三可按下推规则现算（明细不落库），华尔达取客户资料「摘要」列
+                Summary = BuildOrderItemSummary(customer?.Name, i),
                 MatchStatus = i.MatchStatus,
                 ErpPrdNo = i.ErpPrdNo,
                 MaterialSyncStatus = i.MaterialSyncStatus,
@@ -158,6 +163,11 @@ public class OrderService : IOrderService
     /// <summary>
     /// 推送订单（行级）：只推送「未推送且已匹配图号」的明细行，勾选推送时（itemIds 非空）仅推勾选行，
     /// 未勾选行跳过。已推送行自动跳过，全部行推送完成后订单标记已推送，不再允许推送。
+    /// <para>
+    /// 受单号口径：<b>同一上传文件（同一 <see cref="OrderMain.SourceFileId"/> 批次）共用一个受单号</b>。
+    /// 一份文件被拆成多个订单时（如创达按子订单号拆单），首个推送的订单调 MF_POS 建表头，
+    /// 其余订单复用该号，<c>ITM</c> 在该受单号内全局续号，保证 ERP 里只有一张受订单。
+    /// </para>
     /// </summary>
     public async Task<PushResultDto> PushAsync(Guid orderId, ICollection<Guid>? itemIds, CancellationToken cancellationToken)
     {
@@ -191,9 +201,25 @@ public class OrderService : IOrderService
 
         var pushedItems = new List<object>();
         var cusNo = string.Empty;
-        var osNo = string.Empty;
+        // 整单只用一个受订单号：订单已有受订单号时直接复用（补推不再新建表头）
+        var osNo = order.ErpOsNo ?? string.Empty;
         var errors = new List<string>();
         var pushedCount = 0;
+
+        // 同一上传文件共用一个受单号：本订单还没号时，先复用同批次其他订单已取得的号。
+        // 一份文件（如创达按子订单号拆单）在 ERP 里只应出现一张受订单，不再一单建一个表头。
+        var batchOrders = new List<OrderMain>();
+        if (order.SourceFileId.HasValue)
+        {
+            batchOrders = await _orderRepository.ListBySourceFileIdAsync(order.SourceFileId.Value, cancellationToken);
+            if (string.IsNullOrWhiteSpace(osNo))
+            {
+                osNo = batchOrders
+                    .Where(o => o.Id != order.Id)
+                    .Select(o => o.ErpOsNo)
+                    .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? string.Empty;
+            }
+        }
 
         try
         {
@@ -205,17 +231,25 @@ public class OrderService : IOrderService
                 throw new BusinessException($"ERP 接口 get_cus 未找到客户：{customer.Name}");
             }
 
-            // 2. 生成受订单表头，取得受订单号
-            var header = await _erpPushService.CreateOrderHeaderAsync(cusNo, cancellationToken);
-            osNo = header.OsNo;
+            // 2. 首次推送生成受订单表头取得受订单号；已有受订单号则复用，保证整单只有一个单号
             if (string.IsNullOrWhiteSpace(osNo))
             {
-                throw new BusinessException("ERP 接口 MF_POS 未返回受订单号，生成表头失败");
+                var header = await _erpPushService.CreateOrderHeaderAsync(cusNo, cancellationToken);
+                osNo = header.OsNo;
+                if (string.IsNullOrWhiteSpace(osNo))
+                {
+                    throw new BusinessException("ERP 接口 MF_POS 未返回受订单号，生成表头失败");
+                }
             }
 
             // 3. 逐行获取货品代号并生成受订单表身（单行失败不中断其余行）
-            //    ITM 项次从 1 开始连续编号（部分推送时每次生成新受订单表头，表身项次与订单行号无关）
-            var itm = 0;
+            //    ITM 项次在同一受订单号内必须唯一：起点 = 该受单号下已成功推送的行数
+            //    （同批次其他订单可能已往这张单据推过行，需接着续号；历史多号数据只统计本号下的行）
+            var itm = batchOrders
+                    .Where(o => o.Id != order.Id)
+                    .SelectMany(o => o.Items)
+                    .Count(i => i.ItemPushStatus == ItemPushStatus.Pushed && IsSameOsNo(i.ErpOsNo, osNo))
+                + order.Items.Count(i => i.ItemPushStatus == ItemPushStatus.Pushed && IsSameOsNo(i.ErpOsNo, osNo));
             foreach (var item in pendingItems)
             {
                 itm++;
@@ -232,17 +266,28 @@ public class OrderService : IOrderService
                         throw new InvalidOperationException($"ERP 接口 get_PRD 未匹配到货品代号（图号：{item.CustomerPartNo}），请先执行物料同步（ERP 中不存在的货品将自动创建）");
                     }
 
+                    // 华尔达 / 发润达：货品规格带长度说明档案是错的（如 16*2*530、1.4*12*547），
+                    // 推送会在受订单里把长度当成货品规格带出来，直接拦下该行，要求先修正货品资料。
+                    if (OrderSpecCarriesLength(customer.Name) && SpecParser.LooksLikeLength(product.Spc))
+                    {
+                        throw new InvalidOperationException($"ERP 货品 {product.PrdNo} 的规格「{product.Spc}」带长度，拒绝推送；请先在 ERP 货品资料改成「外径*壁厚*模数」");
+                    }
+
                     item.ErpPrdNo = product.PrdNo;
                     // 创达数量以行备注「XXX根」为准
                     var pushQty = IsChuangda(customer.Name)
                         ? ExtractQuantityFromRemark(item.Remark) ?? item.Quantity
                         : item.Quantity;
-                    // 推送规格：统一规范化（去材质留孔型、减号结构转乘号丢长度）；三可客户图号拼接规则不变
-                    var pushSpec = SpecParser.NormalizeSpec(item.Spec);
-                    // 客户图号：三可为 物料编码-收口，其余用匹配到的客户图号；客户订单号即本平台订单号
+                    // 推送规格：统一规范化（去材质留孔型、减号结构转乘号丢长度）；发润达反序规格重排为「外径*壁厚*长度」
+                    var pushSpec = SpecParser.NormalizeSpec(item.Spec, IsFarada(customer.Name));
+                    // 客户图号：三可为 物料编码-收口，华尔达不需要（传空），其余用匹配到的客户图号；客户订单号即本平台订单号
                     var khth = IsSanke(customer.Name)
                         ? BuildSankeKhth(item.MaterialCode, item.ShouKou)
-                        : item.CustomerPartNo;
+                        : IsHuaruda(customer.Name)
+                            ? string.Empty
+                            : item.CustomerPartNo;
+                    // 摘要（REM）：仅三可 = 收口+「收口」；华尔达的「摘要」列只在平台明细展示，按业务要求不传给 ERP
+                    var summary = BuildOrderItemSummary(customer.Name, item);
                     await _erpPushService.CreateOrderItemAsync(new ErpOrderItemRequest
                     {
                         SoNo = osNo,
@@ -251,7 +296,8 @@ public class OrderService : IOrderService
                         Qty = pushQty,
                         Ydd = FormatYdd(item.ReceiveDate, DateTime.Now),
                         Khth = khth,
-                        CusOs = order.OrderNo
+                        CusOs = order.OrderNo,
+                        Rem = summary
                     }, cancellationToken);
 
                     item.ItemPushStatus = ItemPushStatus.Pushed;
@@ -266,7 +312,8 @@ public class OrderService : IOrderService
                         Ydd = FormatYdd(item.ReceiveDate, DateTime.Now),
                         Spec = pushSpec,
                         Khth = khth,
-                        CusOs = order.OrderNo
+                        CusOs = order.OrderNo,
+                        Rem = summary
                     });
                 }
                 catch (Exception ex)
@@ -424,6 +471,31 @@ public class OrderService : IOrderService
         var failed = 0;
         var errors = new List<string>();
 
+        // ERP 货品规格口径统一是「外径*壁厚*模数」，只有客户资料里的规格是这个口径：
+        //   华尔达 / 发润达：订单规格第三段是长度（16*2*530、1.4*12*585），直接写 SPC 会把长度带进货品档案；
+        //   马鞍山仪达：订单 PDF 没有规格列（Spec 为空），只能取资料规格；
+        //   创达 / 三可：订单规格规范化后就是「外径*壁厚*模数」，可直接用，资料作为兜底。
+        // 因此按 NEST 图号 / 客户图号建立「图号 → 资料规格」字典，供新建货品时取用。
+        var partSpecByNo = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var customerParts = await _customerPartRepository.ListByCustomerAsync(order.CustomerId, cancellationToken);
+        foreach (var part in customerParts)
+        {
+            var partSpec = (part.Spec ?? string.Empty).Trim();
+            if (partSpec.Length == 0)
+            {
+                continue;
+            }
+
+            foreach (var key in new[] { part.NestPartNo, part.CustomerPartNo })
+            {
+                var no = (key ?? string.Empty).Trim();
+                if (no.Length > 0)
+                {
+                    partSpecByNo.TryAdd(no, partSpec);
+                }
+            }
+        }
+
         foreach (var item in targets)
         {
             try
@@ -436,12 +508,48 @@ public class OrderService : IOrderService
 
                 if (string.IsNullOrWhiteSpace(product.PrdNo))
                 {
+                    // 新建货品的规格（SPC）取「外径*壁厚*模数」口径：
+                    //   - 华尔达 / 发润达：订单规格第三段是长度，必须取客户资料里该图号的规格（16*2*10、12*1.4*7）；
+                    //   - 马鞍山仪达：订单没有规格（Spec 为空），同样回退客户资料；
+                    //   - 创达 / 三可：订单规格规范化后即为「外径*壁厚*模数」，优先用订单，资料兜底。
+                    // 拿不到合规规格时判失败并提示补资料，绝不把长度或空规格写进 ERP 货品档案。
+                    var orderSpec = SpecParser.NormalizeSpec(item.Spec);
+                    var useOrderSpec = !IsFarada(customerName) && !IsHuaruda(customerName);
+                    var createSpc = useOrderSpec ? orderSpec : string.Empty;
+
+                    if (string.IsNullOrWhiteSpace(createSpc)
+                        && partSpecByNo.TryGetValue(th, out var partSpec)
+                        && !string.IsNullOrWhiteSpace(partSpec))
+                    {
+                        createSpc = SpecParser.NormalizeSpec(partSpec);
+                    }
+
+                    if (string.IsNullOrWhiteSpace(createSpc))
+                    {
+                        item.MaterialSyncStatus = MaterialSyncStatus.Failed;
+                        item.ErpPrdNo = string.Empty;
+                        failed++;
+                        errors.Add($"第 {item.LineNo} 行：客户资料缺少图号 {th} 的规格，无法新建货品（需为「外径*壁厚*模数」）");
+                        _logger.LogWarning("订单 {OrderNo} 第 {LineNo} 行：客户资料缺少图号 {NestNo} 的规格，跳过新建货品", order.OrderNo, item.LineNo, th);
+                        continue;
+                    }
+
+                    if (SpecParser.LooksLikeLength(createSpc))
+                    {
+                        item.MaterialSyncStatus = MaterialSyncStatus.Failed;
+                        item.ErpPrdNo = string.Empty;
+                        failed++;
+                        errors.Add($"第 {item.LineNo} 行：图号 {th} 的规格「{createSpc}」第三段像长度，不能作为货品规格（应为「外径*壁厚*模数」）");
+                        _logger.LogWarning("订单 {OrderNo} 第 {LineNo} 行：图号 {NestNo} 的规格「{Spec}」疑似带长度，跳过新建货品", order.OrderNo, item.LineNo, th, createSpc);
+                        continue;
+                    }
+
                     // ERP 中不存在该货品：调 PRD_TB 新建（米重系统内无数据，不传），再复查回填
                     await _erpPushService.CreateProductAsync(new ErpProductCreateRequest
                     {
                         Th = th,
                         Pic = pic,
-                        Spc = SpecParser.NormalizeSpec(item.Spec),
+                        Spc = createSpc,
                         Caiz = item.Material
                     }, cancellationToken);
 
@@ -456,8 +564,21 @@ public class OrderService : IOrderService
                     }
                     else
                     {
+                        // 复查结果同样校验：万一 ERP 返回的规格带长度，也不能当成功
+                        if (SpecParser.LooksLikeLength(requery.Spc))
+                        {
+                            item.MaterialSyncStatus = MaterialSyncStatus.Failed;
+                            item.ErpPrdNo = string.Empty;
+                            failed++;
+                            errors.Add($"第 {item.LineNo} 行：ERP 货品 {requery.PrdNo} 的规格「{requery.Spc}」带长度，需先在 ERP 货品资料改成「外径*壁厚*模数」");
+                            _logger.LogWarning("订单 {OrderNo} 第 {LineNo} 行：新建后复查货品 {PrdNo} 规格「{Spec}」带长度", order.OrderNo, item.LineNo, requery.PrdNo, requery.Spc);
+                            continue;
+                        }
+
                         // 命中后回填：规格取接口返回的 SPC（规范化：去材质留孔型、减号结构转乘号，不为空时覆盖解析值）
-                        if (!string.IsNullOrWhiteSpace(requery.Spc))
+                        // 华尔达 / 发润达例外：订单规格第三段是长度，与 ERP 的「外径*壁厚*模数」不同口径，
+                        // 覆盖后会出现「规格里没有长度、长度列却有值」的错位，因此这两家保留订单原规格。
+                        if (!OrderSpecCarriesLength(customerName) && !string.IsNullOrWhiteSpace(requery.Spc))
                         {
                             item.Spec = SpecParser.NormalizeSpec(requery.Spc);
                         }
@@ -471,8 +592,22 @@ public class OrderService : IOrderService
                 }
                 else
                 {
+                    // 已有货品：规格带长度说明档案是错的（如 1.4*12*547、16*2*530），
+                    // 继续用它推送会在受订单里把长度当成货品规格带出来，必须先在 ERP 货品资料更正。
+                    if (SpecParser.LooksLikeLength(product.Spc))
+                    {
+                        item.MaterialSyncStatus = MaterialSyncStatus.Failed;
+                        item.ErpPrdNo = string.Empty;
+                        failed++;
+                        errors.Add($"第 {item.LineNo} 行：ERP 货品 {product.PrdNo} 的规格「{product.Spc}」带长度，需先在 ERP 货品资料改成「外径*壁厚*模数」");
+                        _logger.LogWarning("订单 {OrderNo} 第 {LineNo} 行：ERP 货品 {PrdNo} 规格「{Spec}」带长度，跳过同步", order.OrderNo, item.LineNo, product.PrdNo, product.Spc);
+                        continue;
+                    }
+
                     // 命中后回填：规格取接口返回的 SPC（规范化：去材质留孔型、减号结构转乘号，不为空时覆盖解析值）
-                    if (!string.IsNullOrWhiteSpace(product.Spc))
+                    // 华尔达 / 发润达例外：订单规格第三段是长度，与 ERP 的「外径*壁厚*模数」不同口径，
+                    // 覆盖后会出现「规格里没有长度、长度列却有值」的错位，因此这两家保留订单原规格。
+                    if (!OrderSpecCarriesLength(customerName) && !string.IsNullOrWhiteSpace(product.Spc))
                     {
                         item.Spec = SpecParser.NormalizeSpec(product.Spc);
                     }
@@ -527,10 +662,64 @@ public class OrderService : IOrderService
         return !string.IsNullOrWhiteSpace(customerName) && customerName.Contains("三可");
     }
 
+    /// <summary>判断明细行回填的受单号是否与目标受单号一致（忽略空白与大小写）。</summary>
+    private static bool IsSameOsNo(string? itemOsNo, string? osNo)
+    {
+        if (string.IsNullOrWhiteSpace(itemOsNo) || string.IsNullOrWhiteSpace(osNo))
+        {
+            return false;
+        }
+
+        return string.Equals(itemOsNo.Trim(), osNo.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>是否创达客户。</summary>
     private static bool IsChuangda(string? customerName)
     {
         return !string.IsNullOrWhiteSpace(customerName) && customerName.Contains("创达");
+    }
+
+    /// <summary>是否发润达客户（含原名称法拉达）。</summary>
+    private static bool IsFarada(string? customerName)
+    {
+        return !string.IsNullOrWhiteSpace(customerName) && (customerName.Contains("发润达") || customerName.Contains("法拉达"));
+    }
+
+    /// <summary>是否华尔达客户。</summary>
+    private static bool IsHuaruda(string? customerName)
+    {
+        return !string.IsNullOrWhiteSpace(customerName) && customerName.Contains("华尔达");
+    }
+
+    /// <summary>
+    /// 订单规格第三段是「长度」（而不是模数）的客户：华尔达、发润达（法拉达）。
+    /// 这两家的订单规格与 ERP 货品规格（外径*壁厚*模数）不是同一口径，
+    /// 因此明细规格保留订单原值、新建货品必须取客户资料规格。
+    /// </summary>
+    private static bool OrderSpecCarriesLength(string? customerName)
+    {
+        return IsHuaruda(customerName) || IsFarada(customerName);
+    }
+
+    /// <summary>
+    /// 明细摘要（ERP 受订单表身 REM），仅三可发送：
+    /// 三可 = 收口 + 「收口」（如 4.0收口 / 6.9收口），无收口时为空不发送；
+    /// 华尔达的客户资料「摘要」列（如 40支/把）只在平台明细里展示，按业务要求不再传给 ERP。
+    /// </summary>
+    private static string BuildOrderItemSummary(string? customerName, OrderItem item)
+    {
+        if (IsSanke(customerName))
+        {
+            var sk = NormalizeShouKou(item.ShouKou);
+            if (sk.Length == 0 || sk == "0" || sk == "不收口")
+            {
+                return string.Empty;
+            }
+
+            return $"{sk}收口";
+        }
+
+        return string.Empty;
     }
 
     /// <summary>三可客户图号：物料编码/收口（收口为空或 0 时仅物料编码；收口固定带 .0 与「收口」后缀，如 JSJ0406437/4.0收口）。</summary>

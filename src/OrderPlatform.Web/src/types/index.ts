@@ -100,6 +100,8 @@ export interface OrderItemDto {
   pushedAt: string | null;
   /** 行备注（创达订单号所在列）。 */
   remark: string;
+  /** 摘要（三可/华尔达，推送 ERP 受订单表身 REM）。 */
+  summary: string;
   matchStatus: MatchStatus;
   erpPrdNo: string;
   materialSyncStatus: MaterialSyncStatus;

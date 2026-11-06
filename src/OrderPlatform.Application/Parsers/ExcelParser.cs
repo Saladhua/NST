@@ -40,17 +40,61 @@ public class ExcelParser : IExcelParser
             }
 
             var firstRow = usedRows.FirstRow().RowNumber();
+            var firstCol = usedRows.FirstColumn().ColumnNumber();
             var headerCount = usedRows.ColumnCount();
 
             // 表头：第一行
             for (var col = 0; col < headerCount; col++)
             {
-                var cell = sheet.Cell(firstRow, usedRows.FirstColumn().ColumnNumber() + col);
+                var cell = sheet.Cell(firstRow, firstCol + col);
                 data.Headers.Add(TrimCell(cell));
             }
 
-            // 数据行：从第二行开始，忽略全空行
-            for (var rowNum = firstRow + 1; rowNum <= usedRows.LastRow().RowNumber(); rowNum++)
+            // 表头换行续行：第二行的非空单元格若全落在第一行的空表头列上（如华尔达「摘要」写在第二行），
+            // 则把第二行并入表头（该行不再作为数据行）
+            var lastRow = usedRows.LastRow().RowNumber();
+            var dataFirstRow = firstRow + 1;
+            if (dataFirstRow <= lastRow && data.Headers.Any(h => h.Length == 0))
+            {
+                var blanks = new List<int>();
+                for (var col = 0; col < headerCount; col++)
+                {
+                    if (data.Headers[col].Length == 0)
+                    {
+                        blanks.Add(col);
+                    }
+                }
+
+                var filled = new List<int>();
+                for (var col = 0; col < headerCount; col++)
+                {
+                    if (TrimCell(sheet.Cell(dataFirstRow, firstCol + col)).Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (!blanks.Contains(col))
+                    {
+                        filled.Clear();
+                        break;
+                    }
+
+                    filled.Add(col);
+                }
+
+                if (filled.Count > 0)
+                {
+                    foreach (var col in filled)
+                    {
+                        data.Headers[col] = TrimCell(sheet.Cell(dataFirstRow, firstCol + col));
+                    }
+
+                    dataFirstRow = firstRow + 2;
+                }
+            }
+
+            // 数据行：忽略全空行
+            for (var rowNum = dataFirstRow; rowNum <= lastRow; rowNum++)
             {
                 var dict = new Dictionary<string, string>();
                 var anyValue = false;

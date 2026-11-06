@@ -92,6 +92,7 @@ const columnDefaults: Record<string, number> = {
   customerPartNo: 120,
   nestPartNo: 110,
   remark: 230,
+  summary: 160,
   receiveDate: 110,
   quantity: 90,
   amount: 100,
@@ -456,6 +457,19 @@ export default function OrderDetailPage() {
         ) : (
           '-'
         ),
+    },
+    {
+      title: '摘要',
+      dataIndex: 'summary',
+      key: 'summary',
+      width: widthOf('summary'),
+      onHeaderCell: () => ({
+        width: widthOf('summary'),
+        minWidth: minWidthOf('summary'),
+        onResize: handleResize('summary'),
+      }),
+      ellipsis: true,
+      render: (value: string) => value || '-',
     },
     {
       title: '交货日期',

@@ -138,6 +138,9 @@ public class OrderItemDto
     /// <summary>行备注（创达订单号所在列）。</summary>
     public string Remark { get; set; } = string.Empty;
 
+    /// <summary>摘要（三可/华尔达，推送 ERP 受订单表身 REM）。</summary>
+    public string Summary { get; set; } = string.Empty;
+
     /// <summary>匹配状态。</summary>
     public MatchStatus MatchStatus { get; set; }
 

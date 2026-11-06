@@ -172,7 +172,12 @@ public partial class PdfParser : IPdfParser
         return rows;
     }
 
-    /// <summary>把一行词按最近表头 x 归列，返回 [表头词文本 -> 单元格文本]（同列多词拼接）。</summary>
+    /// <summary>
+    /// 把一行词按最近表头 x 归列，返回 [表头词文本 -> 单元格文本]（同列多词拼接）。
+    /// 拼接顺序按「自上而下」的阅读顺序：本模板页面的纵向坐标与阅读方向相反
+    /// （表格绘制在表头上方），同一单元格折行时若按 y 升序拼接会把折行内容读反
+    /// （如 03.02.16*2*520/3102 折成 03.02.16*2*520/310 + 2-16孔 后拼成 2-16孔03.02.16*2*520/310）。
+    /// </summary>
     private static Dictionary<string, string> AssignCells(List<WordItem> row, List<WordItem> headers, bool isYidaLayout)
     {
         var cell = new Dictionary<string, string>();
@@ -180,7 +185,7 @@ public partial class PdfParser : IPdfParser
             .Select((h, idx) => new { h, idx })
             .ToList();
 
-        foreach (var word in row)
+        foreach (var word in row.OrderByDescending(w => w.Y))
         {
             // 每个词归入 x 坐标最近的表头列
             var nearest = headerList
@@ -522,6 +527,10 @@ public partial class PdfParser : IPdfParser
                 ? body + suffix
                 : body + "/" + suffix;
         }
+
+        // ⑤ 主体与模具号粘连缺斜杠：708D97/1100 → 708/D97/1100
+        //    （单元格折行时斜杠被挤掉，如 03.02.16*1.4*708D9 与 7/1100 拼接后的结果）
+        clean = Regex.Replace(clean, @"(\d)(D\d{2}/\d{3,4})$", "$1/$2");
 
         return clean;
     }

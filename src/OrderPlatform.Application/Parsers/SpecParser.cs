@@ -68,7 +68,7 @@ public static partial class SpecParser
             return result;
         }
 
-        var clean = FixMissingSlash(spec.Trim().Replace(" ", string.Empty));
+        var clean = NormalizeCommaNumbers(FixMissingSlash(spec.Trim().Replace(" ", string.Empty)));
         if (!ValidSpecPattern().IsMatch(clean))
         {
             return result;
@@ -248,6 +248,26 @@ public static partial class SpecParser
     }
 
     /// <summary>
+    /// 规格里的逗号数值归一：小数逗号 607,5 → 607.5；千分位（逗号后每组都是 3 位，如 1,280）→ 1280。
+    /// 判定与 TryParseNumber 一致，避免展示串与拆解出的数值口径不一致。
+    /// </summary>
+    private static string NormalizeCommaNumbers(string spec)
+    {
+        if (!spec.Contains(','))
+        {
+            return spec;
+        }
+
+        return Regex.Replace(spec, @"\d+(?:,\d+)+", m =>
+        {
+            var parts = m.Value.Split(',');
+            return parts.Skip(1).All(p => p.Length == 3)
+                ? m.Value.Replace(",", string.Empty)
+                : m.Value.Replace(',', '.');
+        });
+    }
+
+    /// <summary>
     /// 修复规格中「数字+D模具号」粘连缺失斜杠的问题（PDF 单元格内换行断字导致），
     /// 如 16*1.6*176D97/1100 → 16*1.6*176/D97/1100；已带斜杠的规格不受影响。
     /// </summary>
@@ -305,19 +325,23 @@ public static partial class SpecParser
 
     /// <summary>
     /// 规格展示/推送规范化：
+    /// 0. 逗号数值归一：小数逗号 607,5 → 607.5，千分位 1,280 → 1280；
     /// 1. 括号内仅保留孔型等非材质内容（去掉 1060/3102/1100/3F03 等材质牌号），括号变空则整段删除；
     /// 2. 「外径*壁厚-模数*长度」结构的减号转乘号并丢弃长度段（长度单独成列，不并入规格）。
     /// 例：32*2*12（1060，圆孔）→ 32*2*12（圆孔）；18*1.8-14*210 → 18*1.8*14；
     ///    32*1.3-32*862(方孔) → 32*1.3*32(方孔)；25.4*2-13*1686*4 → 25.4*2*13。
+    /// 3. reverseOrder（仅发润达/法拉达）：该客户订单规格为「壁厚*外径*长度」反序，重排为「外径*壁厚*长度」，
+    ///    如 1.4*12*500 → 12*1.4*500。判定与解析一致（首段<次段且首段<5）。其余客户不重排。
+    /// 4. 尾部模具/材质段统一剥离：/D97/1100、/1100、/3F03 均不属于规格。
     /// </summary>
-    public static string NormalizeSpec(string? spec)
+    public static string NormalizeSpec(string? spec, bool reverseOrder = false)
     {
         if (string.IsNullOrWhiteSpace(spec))
         {
             return string.Empty;
         }
 
-        var clean = FixMissingSlash(spec.Trim().Replace(" ", string.Empty));
+        var clean = NormalizeCommaNumbers(FixMissingSlash(spec.Trim().Replace(" ", string.Empty)));
 
         // 1. 去掉括号内的材质牌号，仅保留孔型等非材质词；括号空则整段删除（保留原括号类型）
         clean = BracketPattern().Replace(clean, match =>
@@ -339,11 +363,46 @@ public static partial class SpecParser
             clean = $"{m.Groups[1].Value}*{m.Groups[2].Value}*{m.Groups[3].Value}{m.Groups[4].Value}";
         }
 
-        // 3. 剥离尾部模具/材质段（/D97/1100 或粘连的 D97/1100），规格列仅保留 外径*壁厚*长度 三段
-        //    如 16*1.6*176/D97/1100 → 16*1.6*176；16*1.6*176D97/1100 → 16*1.6*176
-        clean = Regex.Replace(clean, @"/D\d+/\d{3,4}$", string.Empty);
-        clean = Regex.Replace(clean, @"D\d+/\d{3,4}$", string.Empty);
+        // 3. 剥离尾部模具/材质段（/D97/1100、/1100、/3F03、粘连的 D97/1100），规格列仅保留 外径*壁厚*长度 三段
+        //    如 16*1.6*176/D97/1100 → 16*1.6*176；16*2*530/1100 → 16*2*530；16*2*530/3F03 → 16*2*530
+        clean = Regex.Replace(clean, @"(?:/?D\d+)?/(?:\d{3,4}|[0-9A-Z]{4})$", string.Empty, RegexOptions.IgnoreCase);
+
+        // 4. 发润达/法拉达：反序「壁厚*外径*…」重排为「外径*壁厚*…」
+        if (reverseOrder)
+        {
+            var r = Regex.Match(clean, @"^(\d+(?:\.\d+)?)\*(\d+(?:\.\d+)?)(.*)$");
+            if (r.Success
+                && TryParseNumber(r.Groups[1].Value, out var first)
+                && TryParseNumber(r.Groups[2].Value, out var second)
+                && first < second && first < 5m)
+            {
+                clean = $"{r.Groups[2].Value}*{r.Groups[1].Value}{r.Groups[3].Value}";
+            }
+        }
 
         return clean;
+    }
+
+    /// <summary>
+    /// 判断规格第三段是否像「长度」（≥100）：用于识别客户资料里把长度误填进规格的情况，
+    /// 例如 12*1.4*547（第三段是长度）不应作为 ERP 货品规格，正常货品规格应为 12*1.4*7（模数）。
+    /// </summary>
+    public static bool LooksLikeLength(string? spec)
+    {
+        if (string.IsNullOrWhiteSpace(spec))
+        {
+            return false;
+        }
+
+        var parts = spec.Split('*');
+        if (parts.Length < 3)
+        {
+            return false;
+        }
+
+        var m = Regex.Match(parts[2], @"^\s*(\d+(?:\.\d+)?)");
+        return m.Success
+            && decimal.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var value)
+            && value >= 100m;
     }
 }

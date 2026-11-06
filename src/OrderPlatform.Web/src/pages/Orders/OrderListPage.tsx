@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router';
 import dayjs from 'dayjs';
 import { orderApi } from '../../api/order';
 import { uploadApi } from '../../api/upload';
+import { isSupportedCustomer } from '../../utils/customers';
 import { useAuthStore } from '../../store/authStore';
 import type {
   BatchPushItemResult,
@@ -90,10 +91,11 @@ export default function OrderListPage() {
   // 批量推送进行中
   const [batchPushing, setBatchPushing] = useState(false);
 
-  // 加载客户下拉列表
+  // 加载客户下拉列表：只展示平台支持的客户（创达/华尔达/三可/发润达/马鞍山仪达）
   const loadCustomers = useCallback(async () => {
     try {
-      setCustomers(await uploadApi.customers());
+      const list = await uploadApi.customers();
+      setCustomers(list.filter((c) => isSupportedCustomer(c.customerName)));
     } catch {
       setCustomers([]);
     }

@@ -74,6 +74,7 @@ public class OrderDbContext : DbContext
         part.Property(x => x.Spec).HasMaxLength(255);
         part.Property(x => x.Length).HasColumnType("decimal(18,2)");
         part.Property(x => x.ShouKou).HasMaxLength(50);
+        part.Property(x => x.Summary).HasMaxLength(255);
         part.Property(x => x.Raw);
         part.HasIndex(x => x.CustomerId);
 
@@ -138,6 +139,7 @@ public class OrderDbContext : DbContext
         item.Property(x => x.Price).HasColumnType("decimal(18,4)");
         item.Property(x => x.Amount).HasColumnType("decimal(18,2)");
         item.Property(x => x.Remark);
+        item.Property(x => x.Summary).HasMaxLength(255);
         item.Property(x => x.MatchStatus).HasConversion<string>().HasMaxLength(20);
         item.Property(x => x.ErpPrdNo).HasMaxLength(100);
         item.Property(x => x.MaterialSyncStatus).HasConversion<string>().HasMaxLength(20);

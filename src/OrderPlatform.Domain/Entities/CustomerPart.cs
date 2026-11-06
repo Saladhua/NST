@@ -30,6 +30,9 @@ public class CustomerPart
     /// <summary>收口（三可等客户的资料列，如 10 / 4）。</summary>
     public string ShouKou { get; set; } = string.Empty;
 
+    /// <summary>摘要（华尔达资料列，推送 ERP 受订单表身 REM 用）。</summary>
+    public string Summary { get; set; } = string.Empty;
+
     /// <summary>原始整行文本（便于人工核对）。</summary>
     public string Raw { get; set; } = string.Empty;
 

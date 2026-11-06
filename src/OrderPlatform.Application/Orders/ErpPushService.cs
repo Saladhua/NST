@@ -117,6 +117,9 @@ public class ErpOrderItemRequest
 
     /// <summary>客户订单号。</summary>
     public string CusOs { get; set; } = string.Empty;
+
+    /// <summary>摘要（ERP 受订单表身 REM；仅三可「收口」有值，华尔达摘要只在平台展示不传）。</summary>
+    public string Rem { get; set; } = string.Empty;
 }
 
 /// <summary>受订单表身结果。</summary>
@@ -227,6 +230,12 @@ public class ErpPushService : IErpPushService
         if (!string.IsNullOrWhiteSpace(request.CusOs))
         {
             payload["CUS_OS"] = request.CusOs;
+        }
+
+        // 摘要：仅三可「收口」有值（华尔达摘要不传）
+        if (!string.IsNullOrWhiteSpace(request.Rem))
+        {
+            payload["REM"] = request.Rem;
         }
 
         using var doc = await PostAsync("TF_POS", payload, cancellationToken);

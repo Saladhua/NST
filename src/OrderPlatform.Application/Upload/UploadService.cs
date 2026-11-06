@@ -267,6 +267,7 @@ public class UploadService : IUploadService
                     Spec = spec,
                     Length = ParseNullableDecimal(Get(row, "长度（mm)") ?? Get(row, "长度")),
                     ShouKou = Get(row, "收口") ?? string.Empty,
+                    Summary = Get(row, "摘要") ?? string.Empty,
                     Raw = string.Join(" | ", row.Values),
                     CreatedAt = DateTime.Now
                 });
@@ -331,13 +332,14 @@ public class UploadService : IUploadService
                 item.WallThickness = spec.WallThickness;
                 item.Module = spec.Module;
                 item.ShouKou = spec.ShouKou;
-                item.Material = MatchService.ExtractMaterial(row.Material) is var m && m.Length > 0 ? m : spec.Material;
+                item.Material = ResolveOrderMaterial(customer.Name, row, match);
                 item.CustomerPartNo = match.CustomerPartNo;
                 item.NestPartNo = match.NestPartNo;
                 item.Alloy = match.Alloy;
                 item.Spray = match.Spray;
                 item.Length = spec.Length ?? match.Length;
                 item.Remark = row.Remark;
+                item.Summary = match.Summary;
                 item.MatchStatus = match.Status;
                 if (match.Status != MatchStatus.Matched)
                 {
@@ -458,46 +460,57 @@ public class UploadService : IUploadService
         }
     }
 
-    /// <summary>把创达明细行按行备注中的子订单号分组，空备注行并入上方最近有编号的行所在组。</summary>
+    /// <summary>
+    /// 把创达明细行按行备注中的子订单号归并成订单：<b>同一子订单号的行合并到同一个订单，不论是否连续出现</b>
+    /// （如 A→B→A 时第二段 A 仍并入首个 A 订单，避免重复建单被判重跳过而丢行）；
+    /// 空备注行并入上方最近出现的编号所在组；文件开头即无编号的行统一归入兜底组。
+    /// </summary>
     private static List<(string OrderNo, List<PdfParseRow> Rows)> GroupChuangdaRows(IEnumerable<PdfParseRow> rows)
     {
         var groups = new List<(string OrderNo, List<PdfParseRow> Rows)>();
-        var pendingNo = string.Empty;
-        List<PdfParseRow>? pending = null;
+        // 子订单号 → 组下标；同号再次出现时直接追加到已有组，不再新建订单
+        var indexByOrderNo = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        List<PdfParseRow>? lastGroup = null;
 
         foreach (var row in rows)
         {
             var no = PdfParser.ExtractOrderNoFromRemark(row.Remark);
-            if (no.Length > 0 && no != pendingNo)
+            if (no.Length > 0)
             {
-                // 子订单号变化：收尾上一组，开启新组；相同编号的连续行并入当前组
-                if (pending is not null && pending.Count > 0)
+                if (indexByOrderNo.TryGetValue(no, out var existingIndex))
                 {
-                    groups.Add((pendingNo, pending));
+                    lastGroup = groups[existingIndex].Rows;
+                }
+                else
+                {
+                    lastGroup = new List<PdfParseRow>();
+                    indexByOrderNo[no] = groups.Count;
+                    groups.Add((no, lastGroup));
                 }
 
-                pendingNo = no;
-                pending = new List<PdfParseRow>();
-            }
-
-            if (pending is null)
-            {
-                pending = new List<PdfParseRow>();
-            }
-
-            if (pendingNo.Length == 0)
-            {
-                // 首行即无编号（异常场景）：单独记为一组兜底，编号为空时回退表头订单号
-                groups.Add((string.Empty, new List<PdfParseRow> { row }));
+                lastGroup.Add(row);
                 continue;
             }
 
-            pending.Add(row);
-        }
+            if (lastGroup is not null)
+            {
+                // 空备注行：并入上方最近出现的编号所在组
+                lastGroup.Add(row);
+                continue;
+            }
 
-        if (pending is not null && pending.Count > 0)
-        {
-            groups.Add((pendingNo, pending));
+            // 文件开头即无编号：统一归入兜底组（订单号为空，建单时回退表头订单号）
+            if (indexByOrderNo.TryGetValue(string.Empty, out var fallbackIndex))
+            {
+                groups[fallbackIndex].Rows.Add(row);
+            }
+            else
+            {
+                var fallbackRows = new List<PdfParseRow> { row };
+                indexByOrderNo[string.Empty] = groups.Count;
+                groups.Add((string.Empty, fallbackRows));
+                lastGroup = fallbackRows;
+            }
         }
 
         return groups;
@@ -548,7 +561,7 @@ public class UploadService : IUploadService
 
             var spec = SpecParser.ParseOrderSpec(row.Spec);
 
-            // 材质：三可取订单文件材质列（3F03+Zn-H112 → 3F03），其余客户取客户资料匹配到的合金
+            // 材质：订单行给出的材质（华尔达取靠后的材质：规格 → 材质列 → 表体备注），缺失时回退客户资料匹配到的合金
             var orderMaterial = ResolveOrderMaterial(strategyName, row, match);
 
             // 创达数量以行备注「XXX根」为准（如「202608235A，1840根」→ 1840）
@@ -558,7 +571,8 @@ public class UploadService : IUploadService
 
             // 规格统一规范化：去括号内材质留孔型、「外径*壁厚-模数*长度」减号转乘号并丢长度
             // （如创达 18*1.8-14*210 → 18*1.8*14；三可 25.4*2-13*1686*4 → 25.4*2*13）
-            var specText = SpecParser.NormalizeSpec(row.Spec);
+            // 发润达/法拉达：订单规格为「壁厚*外径*长度」反序，额外重排为「外径*壁厚*长度」（1.4*12*500 → 12*1.4*500）
+            var specText = SpecParser.NormalizeSpec(row.Spec, IsFarada(strategyName));
 
             order.Items.Add(new OrderItem
             {
@@ -584,6 +598,7 @@ public class UploadService : IUploadService
                 Amount = row.Amount,
                 ReceiveDate = ResolveReceiveDate(strategyName, row.ReceiveDate),
                 Remark = row.Remark,
+                Summary = match.Summary,
                 MatchStatus = match.Status,
                 MaterialSyncStatus = MaterialSyncStatus.NotSynced,
                 ItemPushStatus = ItemPushStatus.NotPushed,
@@ -649,12 +664,6 @@ public class UploadService : IUploadService
         return !string.IsNullOrWhiteSpace(name) && name.Contains("创达");
     }
 
-    /// <summary>是否三可客户。</summary>
-    private static bool IsSanke(string? name)
-    {
-        return !string.IsNullOrWhiteSpace(name) && name.Contains("三可");
-    }
-
     /// <summary>是否发润达客户（含原名称法拉达）。</summary>
     private static bool IsFarada(string? name)
     {
@@ -673,21 +682,13 @@ public class UploadService : IUploadService
     }
 
     /// <summary>
-    /// 明细材质：三可取订单文件材质列并提取牌号（如 3F03+Zn-H112 → 3F03），缺失时回退到客户资料匹配到的合金；
-    /// 其余客户取客户资料匹配到的合金。
+    /// 明细材质：订单行给出的材质优先（华尔达按列顺序取靠后的材质：规格 → 材质列 → 表体备注，
+    /// 如表体备注 3F03 覆盖规格里的 1100），缺失时回退到客户资料匹配到的合金。
     /// </summary>
     private static string ResolveOrderMaterial(string? customerName, PdfParseRow row, MatchResult match)
     {
-        if (IsSanke(customerName))
-        {
-            var extracted = MatchService.ExtractMaterial(row.Material);
-            if (extracted.Length > 0)
-            {
-                return extracted;
-            }
-        }
-
-        return match.Alloy;
+        var stated = MatchService.ResolveOrderMaterial(customerName, row);
+        return stated.Length > 0 ? stated : match.Alloy;
     }
 
     /// <summary>从行备注提取「XXX根」数量（创达：如「202608032B，6410根」→ 6410）；无则返回 null。</summary>
@@ -762,16 +763,19 @@ public class UploadService : IUploadService
         }
 
         // 客户资料：{"Sheets":[{SheetName,Headers,Rows}]}；订单：PdfParseResult 结构含 Sheets
+        // 客户资料按 sheet 名即客户名，只展示平台支持的客户；订单结构的 sheet 名不是客户名，不做过滤
         var sheets = new List<ExcelSheetDetailDto>();
         var parsed = JsonSerializer.Deserialize<ExcelParseResult>(batch.RawDataJson);
         if (parsed?.Sheets.Count > 0)
         {
-            sheets.AddRange(parsed.Sheets.Select(s => new ExcelSheetDetailDto
-            {
-                SheetName = s.SheetName,
-                Headers = s.Headers,
-                Rows = s.Rows
-            }));
+            sheets.AddRange(parsed.Sheets
+                .Where(s => MatchService.IsSupportedCustomer(s.SheetName))
+                .Select(s => new ExcelSheetDetailDto
+                {
+                    SheetName = s.SheetName,
+                    Headers = s.Headers,
+                    Rows = s.Rows
+                }));
         }
         else
         {

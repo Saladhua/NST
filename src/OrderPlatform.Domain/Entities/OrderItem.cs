@@ -71,6 +71,9 @@ public class OrderItem
     /// <summary>行备注（原始备注列，创达订单号所在列）。</summary>
     public string Remark { get; set; } = string.Empty;
 
+    /// <summary>摘要（匹配到的客户资料「摘要」列，推送 ERP 受订单表身 REM 用）。</summary>
+    public string Summary { get; set; } = string.Empty;
+
     /// <summary>匹配状态：Matched / Partial / Unmatched。</summary>
     public MatchStatus MatchStatus { get; set; }
 
